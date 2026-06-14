@@ -1,0 +1,1013 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Noltbook Dev API Harness</title>
+<style>
+  :root{--amber:#ffaa00;--bg:#0c0c0c;--bg2:#141414;--bd:#333;--dim:#888;--txt:#ddd}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:'Share Tech Mono',ui-monospace,Menlo,monospace;font-size:14px;line-height:1.45}
+  header{padding:.8rem 1rem;border-bottom:1px solid var(--bd);display:flex;align-items:baseline;gap:.6rem}
+  header h1{margin:0;color:var(--amber);font-size:1rem;letter-spacing:.12em}
+  header .sub{color:var(--dim);font-size:.78rem}
+  main{max-width:860px;margin:0 auto;padding:1rem}
+  .card{border:1px solid var(--bd);background:var(--bg2);margin:.75rem 0;padding:.75rem .9rem}
+  .card h2{margin:0 0 .5rem;color:var(--amber);font-size:.82rem;letter-spacing:.08em}
+  .card p.hint{margin:.1rem 0 .6rem;color:var(--dim);font-size:.76rem}
+  button{font-family:inherit;font-size:.82rem;padding:.35rem .8rem;background:transparent;border:1px solid var(--bd);color:var(--txt);cursor:pointer}
+  button:hover:not(:disabled){border-color:var(--amber);color:var(--amber)}
+  button.primary{background:var(--amber);border-color:var(--amber);color:#000;font-weight:bold}
+  button:disabled{opacity:.4;cursor:default}
+  input{font-family:inherit;font-size:.82rem;padding:.35rem .5rem;background:#000;border:1px solid var(--bd);color:var(--txt)}
+  .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin:.35rem 0}
+  .sel{color:var(--amber)}
+  .muted{color:var(--dim)}
+  table{width:100%;border-collapse:collapse;font-size:.78rem;margin-top:.4rem}
+  th,td{text-align:left;padding:.25rem .4rem;border-bottom:1px solid rgba(255,255,255,.06);vertical-align:top}
+  th{color:var(--dim);font-weight:normal}
+  .pill{cursor:pointer;color:var(--amber)}
+  /* selection cues — restrained, dev-harness, not a product hero */
+  tr.note-row{cursor:pointer}
+  tr.note-row:hover td{background:rgba(255,170,0,.06)}
+  tr.note-row.on td{background:rgba(255,170,0,.12);box-shadow:inset 2px 0 0 var(--amber)}
+  .msg{padding:.3rem 0 .3rem .4rem;border-bottom:1px solid rgba(255,255,255,.05)}
+  .msg.click{cursor:pointer}
+  .msg.click:hover{background:rgba(255,170,0,.05)}
+  .msg.on{background:rgba(255,170,0,.10);box-shadow:inset 2px 0 0 var(--amber)}
+  .msg .who{color:var(--amber);font-size:.74rem}
+  .msg .body{white-space:pre-wrap;overflow-wrap:anywhere}
+  .entry{border:1px solid var(--amber);background:rgba(255,170,0,.06);padding:.5rem .6rem;margin:.5rem 0;font-size:.76rem}
+  .entry h3{margin:0 0 .35rem;color:var(--amber);font-size:.74rem;letter-spacing:.06em}
+  .entry .k{color:var(--dim)}
+  .entry .txt{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:.35rem;padding-top:.35rem;border-top:1px solid rgba(255,255,255,.08)}
+  pre.debug{background:#000;border:1px solid var(--bd);padding:.6rem;max-height:240px;overflow:auto;font-size:.72rem;color:#9c9}
+  .status{color:var(--dim);font-size:.76rem;min-height:1.1em}
+  .err{color:#ff6666}
+  .ok{color:#7bd88f}
+</style>
+</head>
+<body>
+<header>
+  <h1>NOLTBOOK DEV</h1><span class="sub">API harness &middot; same-ship Eyre &middot; ~<span id="who">…</span></span>
+</header>
+<main>
+  <div class="card">
+    <p class="hint">Tests the formal Noltbook Developer API v1 over Eyre:
+    reads via <code>api.scry('noltbook','/api/notes')</code> and writes via
+    <code>api.poke('noltbook','noltbook-api',…)</code> — a stable surface, no access to noltbook internals.
+    (Phase 1 used the raw <code>noltbook-action</code> mark; this is the formal veneer.)
+    Selected note: <span id="sel" class="sel">none</span></p>
+    <div class="status" id="status"></div>
+    <div class="status" id="sub"></div>
+    <div class="status" id="result"></div>
+    <div id="resultLog" style="font-size:.72rem;max-height:120px;overflow:auto;margin-top:.3rem"></div>
+  </div>
+
+  <div class="card">
+    <h2>1 &middot; LIST NOTES</h2>
+    <p class="hint">scry <code>/notes</code> &rarr; id, name, type, creator, #users. Click a row to select it.</p>
+    <button onclick="listNotes()">List Notes</button>
+    <div id="notes"></div>
+  </div>
+
+  <div class="card">
+    <h2>2 &middot; CREATE / FIND "api-test"</h2>
+    <p class="hint">scry <code>/notes</code>, match name <b>api-test</b>; else poke <code>create-note</code> and re-scry until it appears.</p>
+    <button class="primary" onclick="createOrFind()">Create / Find</button>
+  </div>
+
+  <div class="card">
+    <h2>3 &middot; POST TEXT MESSAGE</h2>
+    <p class="hint">poke <code>send-message {noteId,text}</code> into the selected note, then re-read.</p>
+    <div class="row">
+      <input id="msgText" placeholder="message text" size="40" value="hello from %noltbook-dev">
+      <button class="primary" onclick="postMessage()">Send</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>4 &middot; POST APP REFERENCE</h2>
+    <p class="hint">Builds <code>~app[~publisher|%desk|Encoded%20Name]</code> and sends it as a normal message —
+    proves Noltbook renders app refs when this note is viewed in Noltbook.</p>
+    <div class="row">
+      <input id="refPub" value="~zod" size="12">
+      <input id="refDesk" value="%noltbook" size="12">
+      <input id="refName" value="Noltbook" size="14">
+      <button class="primary" onclick="postAppRef()">Send App Ref</button>
+    </div>
+    <div class="muted" id="refPreview" style="font-size:.74rem"></div>
+  </div>
+
+  <div class="card">
+    <h2>5 &middot; READ RECENT</h2>
+    <p class="hint">scry <code>/notes/&lt;id&gt;</code> &rarr; last 10 messages + artifact summaries. Artifact detail uses <code>/artifacts/&lt;id&gt;</code>.</p>
+    <div class="row">
+      <button onclick="readRecent()">Read Recent</button>
+      <button onclick="readMeta()">Read Selected Note Meta</button>
+      <button onclick="readCapabilities()">Read Selected Note Capabilities</button>
+    </div>
+    <div id="recent"></div>
+    <div id="entry"></div>
+    <div id="meta"></div>
+    <pre class="debug" id="debug">(no data yet)</pre>
+  </div>
+
+  <div class="card">
+    <h2>6 &middot; PROFILE / CONTACTS</h2>
+    <p class="hint">Read-only profile/contact surfaces:
+    <code>/api/profile/&lt;ship&gt;</code>, <code>/api/contacts</code>,
+    <code>/api/notes/&lt;id&gt;/members</code>. JSON in the debug panel above.</p>
+    <div class="row">
+      <input id="profShip" placeholder="~ship" size="18" value="~zod">
+      <button onclick="readProfile()">Read Profile</button>
+      <button onclick="readContacts()">Read Contacts</button>
+      <button onclick="readMembers()">Read Selected Note Members</button>
+    </div>
+    <div id="people"></div>
+    <p class="hint" style="margin-top:.6rem">Mutations (Phase 15) — for strings:
+    blank = keep, <b>null</b> checkbox = clear, text = set.</p>
+    <div class="row">
+      <input id="pfName" placeholder="displayName" size="16"><label><input type="checkbox" id="pfNameNull">null</label>
+      <input id="pfWallet" placeholder="walletAddress" size="16"><label><input type="checkbox" id="pfWalletNull">null</label>
+      <input id="pfAzimuth" placeholder="azimuthAddress" size="16"><label><input type="checkbox" id="pfAzimuthNull">null</label>
+    </div>
+    <div class="row">
+      <label>avatar
+        <select id="pfAvType"><option value="keep">keep</option><option value="clear">clear</option><option value="urbit">urbit</option><option value="external">external</option><option value="s3">s3</option><option value="ipfs">ipfs</option></select>
+      </label>
+      <input id="pfAvUrl" placeholder="avatar url" size="22">
+      <button class="primary" onclick="updateProfile()">Update Profile</button>
+    </div>
+    <div class="row">
+      <input id="cpShip" placeholder="~ship target" size="18">
+      <button onclick="shipAction('add-contact')">Add Contact</button>
+      <button onclick="shipAction('remove-contact')">Remove Contact</button>
+      <button onclick="shipAction('add-pal')">Add Pal</button>
+      <button onclick="shipAction('remove-pal')">Remove Pal</button>
+      <button onclick="shipAction('block-pal')">Block Pal</button>
+      <button onclick="shipAction('unblock-pal')">Unblock Pal</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>7 &middot; MEMBERSHIP / ADMIN (mutations)</h2>
+    <p class="hint">Poke <code>noltbook-api</code> membership/admin actions on the
+    <b>selected note</b>. Each sends a requestId; watch the result line/log above.
+    Routes through Noltbook's real handlers (host/admin checks enforced).</p>
+    <div class="row">
+      <input id="modShip" placeholder="~ship target" size="18" value="~bus">
+      <button onclick="mod('request-join')">request join</button>
+      <button class="primary" onclick="mod('add-member')">add member</button>
+      <button onclick="mod('remove-member')">remove member</button>
+    </div>
+    <div class="row">
+      <button onclick="mod('approve-join')">approve join</button>
+      <button onclick="mod('deny-join')">deny join</button>
+      <button onclick="mod('deny-block-join')">deny+block</button>
+      <button onclick="mod('mute-member')">mute</button>
+      <button onclick="mod('unmute-member')">unmute</button>
+      <button onclick="mod('make-admin')">make admin</button>
+      <button onclick="mod('remove-admin')">remove admin</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>8 &middot; NOTE CONFIG (mutations)</h2>
+    <p class="hint">Poke <code>set-note-config</code> on the <b>selected note</b>.
+    Only filled fields change; leave a field blank to keep it. Routes through
+    Noltbook's rename / set-note-meta / set-headline handlers (creator-only).</p>
+    <div class="row">
+      <input id="cfgName" placeholder="new name (blank = keep)" size="22">
+      <label>vis
+        <select id="cfgVis">
+          <option value="">(keep)</option>
+          <option value="public">public</option>
+          <option value="private">private</option>
+          <option value="secret">secret</option>
+        </select>
+      </label>
+      <label>writable
+        <select id="cfgWritable">
+          <option value="">(keep)</option>
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <input id="cfgHeadline" placeholder="headline (empty string clears)" size="30">
+      <label><input type="checkbox" id="cfgHeadlineOn"> set headline</label>
+      <button class="primary" onclick="setNoteConfig()">Set Selected Note Config</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>9 &middot; ARTIFACT CREATE</h2>
+    <p class="hint">Poke <code>create-artifact</code> (code/app only — no raw file
+    upload in 12A) into the <b>selected note</b>, with APP attribution. Result shows
+    artifactId/eid; the new artifact appears in Read Recent's artifact rows.</p>
+    <div class="row">
+      <input id="artName" placeholder="artifact name" size="20" value="api-snippet">
+      <label>type
+        <select id="artType"><option value="code">code</option><option value="app">app</option></select>
+      </label>
+      <input id="artReply" placeholder="replyToEid (optional)" size="20">
+    </div>
+    <div class="row">
+      <textarea id="artContent" rows="3" style="width:100%;font-family:inherit;font-size:.82rem;background:#000;border:1px solid var(--bd);color:var(--txt)">console.log('hi from noltbook-dev')</textarea>
+    </div>
+    <button class="primary" onclick="createArtifact()">Create Artifact</button>
+  </div>
+
+  <div class="card">
+    <h2>10 &middot; SEARCH MESSAGES</h2>
+    <p class="hint">Poke <code>search-messages</code> (requestId required) — result
+    arrives on <code>/api/results</code> as <code>api-search-result</code>. Click a
+    hit to open its note. Skips cover/ars-rumors/blocked; cap 50.</p>
+    <div class="row">
+      <input id="searchQ" placeholder="query" size="22">
+      <input id="searchLimit" type="number" placeholder="limit" value="50" size="5" style="width:5rem">
+      <label><input type="checkbox" id="searchSel"> selected note only</label>
+      <button class="primary" onclick="searchMessages()">Search</button>
+    </div>
+    <div id="searchHits"></div>
+  </div>
+
+  <div class="card">
+    <h2>11 &middot; DM FIND / CREATE</h2>
+    <p class="hint">Poke <code>find-or-create-dm</code> for a target ship. On
+    <code>found</code>/<code>dm-created</code> the DM note is selected + read
+    (idempotent — run twice to get the same noteId). requestId required.</p>
+    <div class="row">
+      <input id="dmShip" placeholder="~ship" size="18">
+      <button class="primary" onclick="dmFindOrCreate()">Find / Create DM</button>
+      <button onclick="postDmTest()">Post DM test message</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>12 &middot; GOSSIP NOTE FIND / CREATE</h2>
+    <p class="hint">Poke <code>find-or-create-gossip-note</code> (idempotent by exact
+    name + creator=our + type=gossip). On <code>found</code>/<code>gossip-created</code>
+    the note is selected + read. Creates **user-gossip** notes only.</p>
+    <div class="row">
+      <input id="gnName" placeholder="name" size="18" value="api-gossip-test">
+      <input id="gnHeadline" placeholder="headline (optional)" size="22" value="test headline">
+      <button class="primary" onclick="gossipFindOrCreate()">Find / Create Gossip Note</button>
+      <button onclick="postGossipTest()">Post Gossip Test Message</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>13 &middot; FORKS</h2>
+    <p class="hint"><code>fork-note</code> the selected note (group notes only;
+    member/removed). <code>/api/fork-invites</code> lists pending invites with
+    accept/decline. accept is **async** — it requests a remote fetch + installs later.</p>
+    <div class="row">
+      <input id="forkName" placeholder="fork name (optional)" size="20">
+      <button class="primary" onclick="forkSelected()">Fork Selected Note</button>
+      <button onclick="readForkInvites()">Read Fork Invites</button>
+    </div>
+    <div class="row">
+      <input id="forkRoot" placeholder="rootId" size="24">
+      <button onclick="forkInviteAction('accept-fork-invite')">Accept by rootId</button>
+      <button onclick="forkInviteAction('decline-fork-invite')">Decline by rootId</button>
+    </div>
+    <div id="forkInvites"></div>
+  </div>
+
+  <div class="card">
+    <h2>14 &middot; CALLS</h2>
+    <p class="hint">Noltbook call <b>state</b> only — no media/WebRTC. Start/join/leave
+    operate on the selected note's call. Reads: <code>/api/calls</code>,
+    <code>/api/notes/&lt;id&gt;/calls</code>.</p>
+    <div class="row">
+      <button onclick="readCalls()">Read Calls</button>
+      <button onclick="readNoteCalls()">Read Selected Note Calls</button>
+      <button class="primary" onclick="callAction('start-call')">Start Call</button>
+      <button onclick="callAction('join-call')">Join Call</button>
+      <button onclick="callAction('leave-call')">Leave Call</button>
+    </div>
+    <div id="calls"></div>
+  </div>
+</main>
+
+<script>
+// ---- minimal Eyre client: scry (GET) + poke (channel PUT). No SSE needed; we
+// re-scry after writes (read-after-write). This is intentionally tiny so it can
+// double as a developer example of talking to Noltbook from another app. ----
+const api={
+  ship:null,  // resolved from /~/host by bootShip() before any poke
+  uid:Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+  msgId:0,
+  get url(){return '/~/channel/'+this.uid},
+  async scry(app,path){
+    const r=await fetch('/~/scry/'+app+path+'.json',{credentials:'include'});
+    if(!r.ok)throw new Error('scry '+app+path+' -> '+r.status);
+    return r.json();
+  },
+  async poke(app,mark,json){
+    const r=await fetch(this.url,{method:'PUT',headers:{'Content-Type':'application/json'},credentials:'include',
+      body:JSON.stringify([{id:++this.msgId,action:'poke',ship:this.ship,app,mark,json}])});
+    return r.ok;
+  },
+  // open a subscription on the channel; pair with an EventSource on the same url
+  async subscribe(app,path){
+    const r=await fetch(this.url,{method:'PUT',headers:{'Content-Type':'application/json'},credentials:'include',
+      body:JSON.stringify([{id:++this.msgId,action:'subscribe',ship:this.ship,app,path}])});
+    return r.ok;
+  },
+  ack(eventId){
+    return fetch(this.url,{method:'PUT',headers:{'Content-Type':'application/json'},credentials:'include',
+      body:JSON.stringify([{id:++this.msgId,action:'ack','event-id':eventId}])}).catch(()=>{});
+  }
+};
+
+// monotonic request id; sent on each %noltbook-api poke so the matching
+// /api/results fact can be correlated back to the call that caused it.
+let reqId=0;
+const nextReq=()=>++reqId;
+// Phase 11A: this harness attributes its own pokes. ship is stamped server-side
+// (= our), never sent here. Attribution is metadata, not a separate author.
+const APP={desk:'noltbook-dev',title:'API Harness'};
+let selected=null;
+const $=id=>document.getElementById(id);
+function setStatus(msg,cls){const e=$('status');e.className='status '+(cls||'');e.textContent=msg||''}
+function setBusy(b){document.querySelectorAll('button').forEach(x=>{x.disabled=b})}
+// Resolve the real ship from /~/host (NOT location.hostname, which can be
+// "localhost"). Buttons stay disabled until this completes so no poke is sent
+// with the wrong ship. A "zod" fallback is used only if /~/host AND the auth
+// cookie both fail, and is clearly labeled (never silent).
+async function bootShip(){
+  setBusy(true);
+  setStatus('loading ship…');
+  try{
+    const r=await fetch('/~/host',{credentials:'include'});
+    if(r.ok){
+      const s=(await r.text()).trim().replace(/"/g,'').replace(/^~/,'');
+      if(s){api.ship=s;$('who').textContent=s;setBusy(false);setStatus('ready · ~'+s,'ok');return}
+    }
+    throw new Error('/~/host -> '+r.status);
+  }catch(e){
+    // auth cookie fallback (urbauth-~ship)
+    for(const c of document.cookie.split(';')){
+      const m=c.trim().match(/^urbauth-~([\w-]+)=/);
+      if(m){api.ship=m[1];$('who').textContent=m[1];setBusy(false);setStatus('ship from auth cookie · ~'+m[1],'ok');return}
+    }
+    // last resort: labeled, non-silent fallback
+    api.ship='zod';$('who').textContent='zod (FALLBACK)';setBusy(false);
+    setStatus('could not detect ship via /~/host ('+e.message+') — using FALLBACK ~zod; pokes may target the wrong ship','err');
+  }
+}
+// ---- /api/results subscription (Phase 3). Opt-in: only pokes that carry a
+// requestId produce a fact here. We keep read-after-write too (facts don't
+// replace scries yet) — this just surfaces success/failure honestly. ----
+let resultStream=null;
+function showResult(r){
+  const ok=!!r.ok;
+  const line='#'+r.requestId+' '+(ok?'OK':'FAIL')+' ['+r.code+'] '+r.message
+    +(r.noteId?(' · note='+r.noteId):'')
+    +(r.artifactId?(' · artifactId='+r.artifactId):'')
+    +(r.callId?(' · callId='+r.callId):'')
+    +(r.msgId?(' · msgId='+r.msgId):'')
+    +(r.eid?(' · eid='+r.eid):'');
+  const e=$('result');e.className='status '+(ok?'ok':'err');e.textContent='result '+line;
+  const row=document.createElement('div');row.className=ok?'ok':'err';row.textContent=line;
+  $('resultLog').prepend(row);
+  // Phase 14/16: a successful find-or-create-dm / -gossip-note selects the note.
+  if(r.requestId===pendingSelect){pendingSelect=null; if(ok&&r.noteId)selectNoteFromResult(r);}
+}
+function openResultStream(){
+  resultStream=new EventSource(api.url,{withCredentials:true});
+  resultStream.onmessage=ev=>{
+    if(ev.lastEventId)api.ack(+ev.lastEventId);
+    let d;try{d=JSON.parse(ev.data)}catch(_){return}
+    if(!(d&&d.response==='diff'&&d.json))return;
+    if(d.json['api-result'])showResult(d.json['api-result']);
+    else if(d.json['api-search-result'])showSearch(d.json['api-search-result']);
+  };
+  resultStream.onerror=()=>{$('sub').className='status err';$('sub').textContent='result stream dropped — auto-reconnecting…'};
+}
+async function initResults(){
+  try{
+    const ok=await api.subscribe('noltbook','/api/results');
+    if(!ok){$('sub').className='status err';$('sub').textContent='result subscription failed (channel PUT)';return}
+    openResultStream();
+    $('sub').className='status ok';$('sub').textContent='subscribed · /api/results (live)';
+  }catch(e){$('sub').className='status err';$('sub').textContent='subscribe error: '+e.message}
+}
+function setSel(id){selected=id;$('sel').textContent=id||'none'}
+const esc=s=>(''+s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+async function fetchNotes(){
+  const res=await api.scry('noltbook','/api/notes');
+  return (res&&res.notes)?res.notes:[];
+}
+
+let lastNotes=[];
+function notesTable(){
+  let h='<table><tr><th>name</th><th>id</th><th>type</th><th>creator</th><th>#users</th></tr>';
+  for(const n of lastNotes){
+    const on=(n.id===selected)?' on':'';
+    h+='<tr class="note-row'+on+'" data-note-id="'+esc(n.id)+'">'
+      +'<td class="pill">'+esc(n.name)+'</td>'
+      +'<td class="muted">'+esc(n.id)+'</td><td>'+esc(n.type)+'</td>'
+      +'<td>'+esc(n.creator)+'</td><td>'+(n.userCount||0)+'</td></tr>';
+  }
+  return h+'</table>';
+}
+async function listNotes(){
+  setStatus('scry /api/notes …');
+  try{
+    lastNotes=await fetchNotes();
+    $('notes').innerHTML=notesTable();
+    setStatus(lastNotes.length+' notes. Click a row to select.','ok');
+  }catch(e){setStatus(e.message,'err')}
+}
+function pick(id){
+  if(id!==selected)selectedEntry=null;  // switching notes clears entry selection
+  setSel(id);
+  $('notes').innerHTML=notesTable();     // re-highlight without a full reload
+  setStatus('selected '+id,'ok');
+  readRecent();                          // switch visible details to this note
+  readMeta();
+}
+
+async function createOrFind(){
+  setStatus('poke find-or-create-note "api-test" …');
+  try{
+    // formal API: idempotent server-side (no-op if it already exists). We then
+    // read /api/notes to learn the id (request/response is a later phase).
+    const ok=await api.poke('noltbook','noltbook-api',{action:'find-or-create-note',requestId:nextReq(),data:{name:'api-test'}});
+    if(!ok){setStatus('find-or-create-note poke failed (channel PUT)','err');return}
+    for(let i=0;i<12;i++){
+      await sleep(400);
+      const notes=await fetchNotes();
+      const found=notes.find(n=>n.name==='api-test');
+      // reuse the note-list we just fetched, then select via the same path a row
+      // click uses (highlights row + switches Read Recent / Meta).
+      if(found){lastNotes=notes;pick(found.id);return}
+    }
+    setStatus('did not appear within timeout — try List Notes','err');
+  }catch(e){setStatus(e.message,'err')}
+}
+
+async function postMessage(){
+  if(!selected){setStatus('select/create a note first','err');return}
+  const text=$('msgText').value;
+  if(!text){setStatus('enter message text','err');return}
+  setStatus('poke post-message …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'post-message',requestId:nextReq(),app:APP,data:{noteId:selected,text}});
+    if(!ok){setStatus('post-message poke failed','err');return}
+    await sleep(400);
+    setStatus('sent.','ok');
+    readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
+
+// client-side PREVIEW only — the actual ref string is built server-side by the
+// post-app-ref API (publisher/desk/name validated + name percent-encoded there).
+function refFields(){
+  return {publisher:($('refPub').value||'~zod').trim(),
+          desk:($('refDesk').value||'%noltbook').trim(),
+          name:($('refName').value||'').trim()};
+}
+function previewRef(){const f=refFields();const d=f.desk.replace(/^%/,'');const p=f.publisher.replace(/^~?/,'~');return '~app['+p+'|%'+d+'|'+encodeURIComponent(f.name||d)+']'}
+function updateRefPreview(){$('refPreview').textContent='(server builds) '+previewRef()}
+['refPub','refDesk','refName'].forEach(id=>$(id).addEventListener('input',updateRefPreview));
+updateRefPreview();
+// event delegation: ids live in data-* attributes (HTML-escaped), never in inline
+// JS strings. One listener per container survives innerHTML repaints.
+$('notes').addEventListener('click',ev=>{
+  const tr=ev.target.closest('tr.note-row');
+  if(tr&&tr.dataset.noteId)pick(tr.dataset.noteId);
+});
+$('recent').addEventListener('click',ev=>{
+  const btn=ev.target.closest('button[data-act]');
+  if(btn){  // buttons handled first so they don't also select the row
+    const act=btn.dataset.act;
+    if(act==='edit')startEdit(+btn.dataset.i);
+    else if(act==='delete')deleteMessage(+btn.dataset.i);
+    else if(act==='detail')readArtifact(btn.dataset.artId);
+    return;
+  }
+  const mrow=ev.target.closest('.msg[data-kind="msg"]');
+  if(mrow){selectMsg(+mrow.dataset.i);return}
+  const arow=ev.target.closest('.msg[data-kind="art"]');
+  if(arow&&arow.dataset.artId)selectArt(arow.dataset.artId);
+});
+// selected-entry detail block: artifact Edit/Delete buttons
+$('entry').addEventListener('click',ev=>{
+  const btn=ev.target.closest('button[data-act]');
+  if(!btn)return;
+  if(btn.dataset.act==='art-edit')editArtifact(btn.dataset.artId);
+  else if(btn.dataset.act==='art-delete')deleteArtifact(btn.dataset.artId);
+});
+// search hit rows -> open the hit's note (and select the message if in window)
+$('searchHits').addEventListener('click',ev=>{
+  const row=ev.target.closest('.msg[data-note-id]');
+  if(row)openHit(row.dataset.noteId,row.dataset.msgId);
+});
+// fork invite rows -> accept/decline by rootId
+$('forkInvites').addEventListener('click',ev=>{
+  const btn=ev.target.closest('button[data-act]');
+  if(!btn)return;
+  if(btn.dataset.act==='fork-accept')forkInviteAction('accept-fork-invite',btn.dataset.root);
+  else if(btn.dataset.act==='fork-decline')forkInviteAction('decline-fork-invite',btn.dataset.root);
+});
+bootShip().then(()=>{if(api.ship)initResults()});  // resolve ship, enable buttons, then subscribe to /api/results
+
+async function postAppRef(){
+  if(!selected){setStatus('select/create a note first','err');return}
+  const f=refFields();
+  setStatus('poke post-app-ref …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'post-app-ref',requestId:nextReq(),app:APP,
+      data:{noteId:selected,publisher:f.publisher,desk:f.desk,name:f.name||f.desk.replace(/^%/,'')}});
+    if(!ok){setStatus('post-app-ref poke failed','err');return}
+    await sleep(400);
+    setStatus('sent app ref (server built it)','ok');
+    readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
+
+// last rendered message rows, indexed so Edit/Delete buttons can reference a
+// message by position (avoids quoting @da/@uv ids into onclick attributes).
+let lastMsgs=[];
+let lastArts=[];
+// {type:'message', msgId, eid} | {type:'artifact', id} | null
+let selectedEntry=null;
+// eid-first, msgId-fallback: send whichever ids the read API gave us; the
+// backend resolves the same target and returns the resolved msgId/eid.
+function msgRef(m){const d={}; if(m.eid)d.eid=m.eid; if(m.msgId)d.msgId=m.msgId; return d}
+function startEdit(i){
+  const m=lastMsgs[i]; if(!m)return;
+  const text=prompt('Edit message text:', m.text);
+  if(text==null)return;  // cancelled
+  doEdit(m,text);
+}
+async function doEdit(m,text){
+  setStatus('poke edit-message …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',
+      {action:'edit-message',requestId:nextReq(),data:Object.assign({noteId:selected,text},msgRef(m))});
+    if(!ok){setStatus('edit-message poke failed','err');return}
+    await sleep(400); setStatus('edit sent.','ok'); readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function deleteMessage(i){
+  const m=lastMsgs[i]; if(!m)return;
+  if(!confirm('Delete this message?'))return;
+  setStatus('poke delete-message …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',
+      {action:'delete-message',requestId:nextReq(),data:Object.assign({noteId:selected},msgRef(m))});
+    if(!ok){setStatus('delete-message poke failed','err');return}
+    await sleep(400); setStatus('delete sent.','ok'); readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
+function viaText(v){return v?('via '+v.desk+(v.title?(' ('+v.title+')'):'')+' on '+v.ship):''}
+function kv(k,val){return(val===undefined||val===null||val==='')?'':'<div><span class="k">'+esc(k)+':</span> '+esc(val)+'</div>'}
+function msgIsSel(m){return selectedEntry&&selectedEntry.type==='message'&&(selectedEntry.msgId===m.msgId||(!!selectedEntry.eid&&selectedEntry.eid===m.eid))}
+function artIsSel(a){return selectedEntry&&selectedEntry.type==='artifact'&&selectedEntry.id===a.id}
+// re-paint rows + selected-entry detail from in-memory lastMsgs/lastArts (no scry)
+function paintRecent(){
+  let h='<div class="muted" style="font-size:.74rem">showing last '+lastMsgs.length+' messages, '+lastArts.length+' artifacts</div>';
+  lastMsgs.forEach((m,i)=>{
+    h+='<div class="msg click'+(msgIsSel(m)?' on':'')+'" data-kind="msg" data-i="'+i+'">'
+      +'<div class="who">'+esc(m.author)+' · '+new Date(m.timestamp).toLocaleTimeString()+(m.edited?' · edited':'')+'</div>'
+      +'<div class="body">'+esc(m.text)+'</div>'
+      +'<div class="muted" style="font-size:.7rem">msgId '+esc(m.msgId||'')+(m.eid?' · eid '+esc(m.eid):'')
+        +(m.via?(' · <span style="color:var(--amber)">'+esc(viaText(m.via))+'</span>'):'')+'</div>'
+      +'<div class="row" style="margin:.2rem 0 0">'
+      +'<button data-act="edit" data-i="'+i+'">Edit</button>'
+      +'<button data-act="delete" data-i="'+i+'">Delete</button></div></div>';
+  });
+  if(lastArts.length){
+    h+='<div class="muted" style="font-size:.74rem;margin-top:.4rem">artifacts:</div>';
+    lastArts.forEach((a,i)=>{
+      const bits=[a.type,a.creator,a.versionCount?('v'+a.latestVersion+'/'+a.versionCount):'',a.mime||a.kind||''].filter(Boolean).join(' · ');
+      h+='<div class="msg click'+(artIsSel(a)?' on':'')+'" data-kind="art" data-art-id="'+esc(a.id)+'">'
+        +'<div class="who">'+esc(a.name||a.id)+(a.via?(' · <span style="color:var(--amber)">'+esc(viaText(a.via))+'</span>'):'')+'</div>'
+        +'<div class="muted" style="font-size:.72rem">'+esc(bits)+'</div>'
+        +'<button data-act="detail" data-art-id="'+esc(a.id)+'" style="margin-top:.25rem">Detail</button></div>';
+    });
+  }
+  $('recent').innerHTML=h;
+  renderEntry();
+}
+function renderEntry(){
+  const e=$('entry');
+  if(!selectedEntry){e.innerHTML='';return}
+  if(selectedEntry.type==='message'){
+    const m=lastMsgs.find(msgIsSel);
+    if(!m){e.innerHTML='';return}
+    e.innerHTML='<div class="entry"><h3>SELECTED MESSAGE</h3>'
+      +kv('author',m.author)+kv('time',new Date(m.timestamp).toLocaleString())
+      +kv('msgId',m.msgId)+kv('eid',m.eid)+kv('edited',m.edited?'true':'false')
+      +(m.via?kv('via',viaText(m.via)):'')
+      +'<div class="txt">'+esc(m.text)+'</div></div>';
+  }else{
+    const a=lastArts.find(artIsSel);
+    if(!a){e.innerHTML='';return}
+    const ver=a.versionCount?('v'+a.latestVersion+'/'+a.versionCount):'';
+    e.innerHTML='<div class="entry"><h3>SELECTED ARTIFACT</h3>'
+      +kv('name',a.name||a.id)+kv('id',a.id)+kv('creator',a.creator)+kv('type',a.type)
+      +kv('eid',a.eid)+kv('version',ver)+kv('mime',a.mime||a.kind)
+      +(a.via?kv('via',viaText(a.via)):'')
+      +(a.url?('<div style="margin-top:.3rem"><a href="'+esc(a.url)+'" target="_blank" rel="noopener" style="color:var(--amber)">open bytes</a>'
+        +(a.downloadUrl?' · <a href="'+esc(a.downloadUrl)+'" target="_blank" rel="noopener" style="color:var(--amber)">download</a>':'')+'</div>'):'')
+      +'<div class="row" style="margin-top:.35rem"><button data-act="art-edit" data-art-id="'+esc(a.id)+'">Edit Artifact</button>'
+      +'<button data-act="art-delete" data-art-id="'+esc(a.id)+'">Delete Artifact</button></div>'
+      +'</div>';
+  }
+}
+function selectMsg(i){const m=lastMsgs[i];if(!m)return;selectedEntry={type:'message',msgId:m.msgId,eid:m.eid};paintRecent()}
+function selectArt(id){selectedEntry={type:'artifact',id};paintRecent()}
+async function readRecent(){
+  if(!selected){setStatus('select/create a note first','err');return}
+  setStatus('scry /api/notes/'+selected+' …');
+  try{
+    const res=await api.scry('noltbook','/api/notes/'+selected);
+    const msgs=(res&&res.messages)||[];
+    lastArts=(res&&res.artifacts)||[];
+    lastMsgs=msgs.slice(-10);
+    // keep the current selection if its target still exists; else clear it
+    if(selectedEntry&&selectedEntry.type==='message'&&!lastMsgs.some(msgIsSel))selectedEntry=null;
+    if(selectedEntry&&selectedEntry.type==='artifact'&&!lastArts.some(artIsSel))selectedEntry=null;
+    paintRecent();
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    setStatus(msgs.length+' messages, '+lastArts.length+' artifacts','ok');
+  }catch(e){setStatus(e.message,'err');$('debug').textContent=String(e)}
+}
+async function readArtifact(id){
+  selectArt(id);  // mark the row + selected-entry detail
+  setStatus('scry /api/artifacts/'+id+' …');
+  try{
+    const res=await api.scry('noltbook','/api/artifacts/'+encodeURIComponent(id));
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,12000);
+    const a=res&&res.artifact;
+    if(a)setStatus('artifact detail ok · '+(a.name||a.id)+' · '+(a.versions?a.versions.length:0)+' versions','ok');
+    else setStatus('artifact detail returned no artifact','err');
+  }catch(e){setStatus(e.message,'err');$('debug').textContent=String(e)}
+}
+// ---- Phase 8: note metadata + capabilities ----
+function capLine(c){
+  const yes=Object.keys(c).filter(k=>k.indexOf('can')===0&&c[k]===true).map(k=>k.slice(3));
+  const flags=['isCreator','isAdmin','isMuted','isRemoved','isHostDeleted','isHostUnreachable']
+    .filter(k=>c[k]===true).map(k=>k.slice(2));
+  return 'can: '+(yes.join(', ')||'(none)')+' · '+(flags.join(', ')||'no flags')+' · reason='+(c.reason||'');
+}
+async function readMeta(){
+  if(!selected){setStatus('select/create a note first','err');return}
+  setStatus('scry /api/notes/'+selected+'/meta …');
+  try{
+    const res=await api.scry('noltbook','/api/notes/'+encodeURIComponent(selected)+'/meta');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,12000);
+    const c=res.capabilities||{};
+    $('meta').innerHTML='<div class="msg"><div class="who">'+esc(res.name||res.id)+' · '+esc(res.type)+'</div>'
+      +'<div class="muted" style="font-size:.72rem">creator='+esc(res.creator)+' · vis='+esc(res.visibility)
+      +' · writable='+res.writable+' · users='+res.userCount+' · removed='+res.removedCount
+      +' · children='+((res.children||[]).length)+(res.hostStatus?(' · host='+esc(res.hostStatus)):'')
+      +(res.forkVersion?(' · forkV'+res.forkVersion):'')+'</div>'
+      +'<div class="muted" style="font-size:.72rem">'+esc(capLine(c))+'</div></div>';
+    setStatus('meta ok · '+(res.name||res.id),'ok');
+  }catch(e){setStatus('meta: '+e.message+' (note exists?)','err');$('debug').textContent=String(e)}
+}
+async function readCapabilities(){
+  if(!selected){setStatus('select/create a note first','err');return}
+  setStatus('scry /api/notes/'+selected+'/capabilities …');
+  try{
+    const res=await api.scry('noltbook','/api/notes/'+encodeURIComponent(selected)+'/capabilities');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,12000);
+    $('meta').innerHTML='<div class="msg"><div class="who">capabilities · '+esc(res.noteId||selected)+'</div>'
+      +'<div class="muted" style="font-size:.72rem">'+esc(capLine(res))+'</div></div>';
+    setStatus('capabilities ok · canPost='+res.canPost+' · canUploadArtifact='+res.canUploadArtifact,'ok');
+  }catch(e){setStatus('capabilities: '+e.message+' (note exists?)','err');$('debug').textContent=String(e)}
+}
+// ---- Phase 9: membership/admin mutations ----
+async function mod(action){
+  if(!selected){setStatus('select/create a note first','err');return}
+  const ship=($('modShip').value||'').trim();
+  if(!ship){setStatus('enter a target ~ship','err');return}
+  const data={noteId:selected};
+  // request-join takes an optional host; everything else takes ship.
+  if(action==='request-join'){ if(ship) data.host=ship; } else { data.ship=ship; }
+  setStatus('poke '+action+' '+ship+' …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action,requestId:nextReq(),data});
+    if(!ok){setStatus(action+' poke failed (channel PUT)','err');return}
+    await sleep(400);
+    setStatus(action+' sent.','ok');
+    // refresh members + capabilities so the effect (or lack of) is visible
+    readMembers();
+  }catch(e){setStatus(e.message,'err')}
+}
+// ---- Phase 12A: artifact creation (code/app) ----
+async function createArtifact(){
+  if(!selected){setStatus('select/create a note first','err');return}
+  const name=$('artName').value.trim();
+  if(!name){setStatus('enter an artifact name','err');return}
+  const data={noteId:selected,name,type:$('artType').value,content:$('artContent').value};
+  const rte=$('artReply').value.trim(); if(rte)data.replyToEid=rte;
+  setStatus('poke create-artifact …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'create-artifact',requestId:nextReq(),app:APP,data});
+    if(!ok){setStatus('create-artifact poke failed','err');return}
+    await sleep(400);
+    setStatus('create-artifact sent.','ok');
+    readRecent();  // artifact appears in the artifact rows
+  }catch(e){setStatus(e.message,'err')}
+}
+async function editArtifact(id){
+  const cur=lastArts.find(a=>a.id===id);
+  const content=prompt('New artifact content:', cur?(cur.latestContent||''):'');
+  if(content==null)return;  // cancelled
+  setStatus('poke edit-artifact …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'edit-artifact',requestId:nextReq(),data:{id,content}});
+    if(!ok){setStatus('edit-artifact poke failed','err');return}
+    await sleep(400); setStatus('edit-artifact sent.','ok'); readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function deleteArtifact(id){
+  if(!confirm('Delete this artifact?'))return;
+  setStatus('poke delete-artifact …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'delete-artifact',requestId:nextReq(),data:{id}});
+    if(!ok){setStatus('delete-artifact poke failed','err');return}
+    // readRecent re-scry clears selectedEntry if this artifact no longer exists
+    await sleep(400); setStatus('delete-artifact sent.','ok'); readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
+// ---- Phase 18: calls ----
+function renderCalls(calls,where){
+  let h='<div class="muted" style="font-size:.74rem">'+(where||'')+calls.length+' call(s)</div>';
+  calls.forEach(c=>{
+    h+='<div class="msg"><div class="who">'+esc(c.status)+' · note '+esc(c.noteId)+' · by '+esc(c.startedBy)+'</div>'
+      +'<div class="muted" style="font-size:.72rem">callId '+esc(c.callId)+' · participants '+(c.participants||[]).map(esc).join(', ')+'</div></div>';
+  });
+  $('calls').innerHTML=h;
+}
+async function readCalls(){
+  setStatus('scry /api/calls …');
+  try{
+    const res=await api.scry('noltbook','/api/calls');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    renderCalls((res&&res.calls)||[],'all: ');
+    setStatus('calls ok','ok');
+  }catch(e){setStatus(e.message,'err')}
+}
+async function readNoteCalls(){
+  if(!selected){setStatus('select a note first','err');return}
+  setStatus('scry /api/notes/'+selected+'/calls …');
+  try{
+    const res=await api.scry('noltbook','/api/notes/'+encodeURIComponent(selected)+'/calls');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    renderCalls((res&&res.calls)||[],'note '+esc(res.noteId||selected)+': ');
+    setStatus('note calls ok','ok');
+  }catch(e){setStatus(e.message,'err')}
+}
+async function callAction(action){
+  if(!selected){setStatus('select a note first','err');return}
+  setStatus('poke '+action+' …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action,requestId:nextReq(),data:{noteId:selected}});
+    if(!ok){setStatus(action+' poke failed','err');return}
+    await sleep(400); setStatus(action+' sent.','ok'); readNoteCalls();
+  }catch(e){setStatus(e.message,'err')}
+}
+// ---- Phase 17: forks ----
+async function forkSelected(){
+  if(!selected){setStatus('select a group note to fork','err');return}
+  const data={noteId:selected}; const nm=$('forkName').value.trim(); if(nm)data.name=nm;
+  const rid=nextReq(); pendingSelect=rid;  // select the new fork note on success
+  setStatus('poke fork-note …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'fork-note',requestId:rid,data});
+    if(!ok){setStatus('fork-note poke failed','err');pendingSelect=null;return}
+    setStatus('fork requested — awaiting result …','ok');
+  }catch(e){setStatus(e.message,'err');pendingSelect=null}
+}
+async function readForkInvites(){
+  setStatus('scry /api/fork-invites …');
+  try{
+    const res=await api.scry('noltbook','/api/fork-invites');
+    const invs=(res&&res.forkInvites)||[];
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    let h='<div class="muted" style="font-size:.74rem">'+invs.length+' pending fork invites</div>';
+    invs.forEach(iv=>{
+      h+='<div class="msg"><div class="who">'+esc(iv.sourceName||iv.rootId)+' · from '+esc(iv.forker)+(iv.fetching?' · fetching':'')+'</div>'
+        +'<div class="muted" style="font-size:.72rem">rootId '+esc(iv.rootId)+' · v'+iv.sourceVersion+'</div>'
+        +'<div class="row" style="margin-top:.2rem"><button data-act="fork-accept" data-root="'+esc(iv.rootId)+'">Accept</button>'
+        +'<button data-act="fork-decline" data-root="'+esc(iv.rootId)+'">Decline</button></div></div>';
+    });
+    $('forkInvites').innerHTML=h;
+    setStatus(invs.length+' fork invites','ok');
+  }catch(e){setStatus(e.message,'err')}
+}
+async function forkInviteAction(action,root){
+  const rootId=root||$('forkRoot').value.trim();
+  if(!rootId){setStatus('enter a rootId','err');return}
+  setStatus('poke '+action+' …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action,requestId:nextReq(),data:{rootId}});
+    if(!ok){setStatus(action+' poke failed','err');return}
+    await sleep(400); setStatus(action+' sent.','ok'); readForkInvites();  // refresh
+  }catch(e){setStatus(e.message,'err')}
+}
+// ---- Phase 14: DM find/create ----
+let pendingSelect=null;  // requestId of an in-flight find-or-create-dm/-gossip
+async function dmFindOrCreate(){
+  const ship=$('dmShip').value.trim();
+  if(!ship){setStatus('enter a target ~ship','err');return}
+  const rid=nextReq(); pendingSelect=rid;
+  setStatus('poke find-or-create-dm …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'find-or-create-dm',requestId:rid,data:{ship}});
+    if(!ok){setStatus('find-or-create-dm poke failed','err');pendingSelect=null;return}
+    setStatus('dm request sent — awaiting result …','ok');
+  }catch(e){setStatus(e.message,'err');pendingSelect=null}
+}
+// select + read the note named in a result (DM or gossip create/find).
+function selectNoteFromResult(r){
+  // refresh the note list so a newly-created row appears, then select+read
+  listNotes().then(()=>{setSel(r.noteId);selectedEntry=null;$('notes').innerHTML=notesTable();readRecent();readMeta()});
+}
+async function postDmTest(){
+  if(!selected){setStatus('select/create a DM first','err');return}
+  setStatus('poke post-message (dm test) …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'post-message',requestId:nextReq(),app:APP,
+      data:{noteId:selected,text:'dm test from %noltbook-dev'}});
+    if(!ok){setStatus('post-message poke failed','err');return}
+    await sleep(400); setStatus('dm test sent.','ok'); readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
+// ---- Phase 16: gossip note find/create ----
+async function gossipFindOrCreate(){
+  const name=$('gnName').value.trim();
+  if(!name){setStatus('enter a gossip note name','err');return}
+  const data={name}; const hl=$('gnHeadline').value; if(hl)data.headline=hl;
+  const rid=nextReq(); pendingSelect=rid;
+  setStatus('poke find-or-create-gossip-note …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'find-or-create-gossip-note',requestId:rid,data});
+    if(!ok){setStatus('gossip-note poke failed','err');pendingSelect=null;return}
+    setStatus('gossip note request sent — awaiting result …','ok');
+  }catch(e){setStatus(e.message,'err');pendingSelect=null}
+}
+async function postGossipTest(){
+  if(!selected){setStatus('select/create a gossip note first','err');return}
+  setStatus('poke post-message (gossip test) …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'post-message',requestId:nextReq(),app:APP,
+      data:{noteId:selected,text:'gossip test from %noltbook-dev'}});
+    if(!ok){setStatus('post-message poke failed','err');return}
+    await sleep(400); setStatus('gossip test sent.','ok'); readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
+// ---- Phase 13: message search ----
+async function searchMessages(){
+  const q=$('searchQ').value;
+  if(!q){setStatus('enter a query','err');return}
+  const data={query:q,limit:+($('searchLimit').value||50)};
+  if($('searchSel').checked){
+    if(!selected){setStatus('check "selected note only" needs a selected note','err');return}
+    data.noteId=selected;
+  }
+  setStatus('poke search-messages …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'search-messages',requestId:nextReq(),data});
+    if(!ok){setStatus('search poke failed','err');return}
+    setStatus('search sent — awaiting api-search-result …','ok');
+  }catch(e){setStatus(e.message,'err')}
+}
+function showSearch(r){
+  const hits=r.hits||[];
+  let h='<div class="muted" style="font-size:.74rem">#'+r.requestId+' query "'+esc(r.query)+'" · '+hits.length+' hits'+(r.capped?' (capped)':'')+'</div>';
+  hits.forEach(ht=>{
+    h+='<div class="msg click" data-note-id="'+esc(ht.noteId)+'" data-msg-id="'+esc(ht.msgId||'')+'">'
+      +'<div class="who">'+esc(ht.author)+' · '+new Date(ht.timestamp).toLocaleTimeString()+' · note '+esc(ht.noteId)+'</div>'
+      +'<div class="body">'+esc(ht.preview)+'</div>'
+      +'<div class="muted" style="font-size:.7rem">msgId '+esc(ht.msgId||'')+(ht.eid?' · eid '+esc(ht.eid):'')+'</div></div>';
+  });
+  $('searchHits').innerHTML=h;
+  setStatus('search #'+r.requestId+': '+hits.length+' hits'+(r.capped?' (capped)':''),'ok');
+}
+async function openHit(nid,mid){
+  if(nid!==selected)selectedEntry=null;
+  setSel(nid);
+  if(lastNotes.length)$('notes').innerHTML=notesTable();
+  readMeta();
+  await readRecent();
+  if(mid){
+    const m=lastMsgs.find(x=>x.msgId===mid);
+    if(m){selectedEntry={type:'message',msgId:m.msgId,eid:m.eid};paintRecent();}
+    // else: hit is older than the last-10 window — note is opened, message not selected
+  }
+}
+// ---- Phase 10: note configuration ----
+async function setNoteConfig(){
+  if(!selected){setStatus('select/create a note first','err');return}
+  const data={noteId:selected};
+  const name=$('cfgName').value.trim();    if(name) data.name=name;
+  const vis=$('cfgVis').value;             if(vis) data.visibility=vis;
+  const wr=$('cfgWritable').value;         if(wr!=='') data.writable=(wr==='true');
+  // headline only sent when the checkbox is on, so an empty box can deliberately
+  // clear it (vs. "leave unchanged" when the checkbox is off).
+  if($('cfgHeadlineOn').checked) data.headline=$('cfgHeadline').value;
+  setStatus('poke set-note-config …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'set-note-config',requestId:nextReq(),data});
+    if(!ok){setStatus('set-note-config poke failed','err');return}
+    await sleep(400);
+    setStatus('config sent.','ok');
+    readMeta();  // re-read so name/visibility/writable/headline changes are visible
+  }catch(e){setStatus(e.message,'err')}
+}
+// ---- Phase 15: profile / contact / pal mutations ----
+// three-state string: null checkbox => null (clear); empty => undefined (keep,
+// omitted from JSON); else the value (set).
+function threeField(inputId,nullId){
+  if($(nullId).checked)return null;
+  const v=$(inputId).value;
+  return v===''?undefined:v;
+}
+async function updateProfile(){
+  const data={};
+  const dn=threeField('pfName','pfNameNull'); if(dn!==undefined)data.displayName=dn;
+  const wa=threeField('pfWallet','pfWalletNull'); if(wa!==undefined)data.walletAddress=wa;
+  const za=threeField('pfAzimuth','pfAzimuthNull'); if(za!==undefined)data.azimuthAddress=za;
+  const at=$('pfAvType').value;
+  if(at==='clear')data.avatar=null;
+  else if(at!=='keep')data.avatar={type:at,url:$('pfAvUrl').value};
+  setStatus('poke update-profile …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'update-profile',requestId:nextReq(),data});
+    if(!ok){setStatus('update-profile poke failed','err');return}
+    await sleep(400);
+    if(api.ship){$('profShip').value='~'+api.ship;readProfile();}  // re-read our profile
+    setStatus('update-profile sent.','ok');
+  }catch(e){setStatus(e.message,'err')}
+}
+async function shipAction(action){
+  const ship=$('cpShip').value.trim();
+  if(!ship){setStatus('enter a target ~ship','err');return}
+  setStatus('poke '+action+' '+ship+' …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action,requestId:nextReq(),data:{ship}});
+    if(!ok){setStatus(action+' poke failed','err');return}
+    await sleep(400); setStatus(action+' sent.','ok');
+    // re-read the relevant surface: contacts for contact ops, target profile for pals
+    if(action.indexOf('contact')>=0)readContacts();
+    else{$('profShip').value=ship;readProfile();}
+  }catch(e){setStatus(e.message,'err')}
+}
+// ---- Phase 7: read-only profile/contact surfaces ----
+function personLine(p){
+  const bits=[p.ship, p.known?'known':'unknown', p.displayName||'(no name)',
+    'pal='+p.palStatus, p.isContact?'contact':'', p.isBlocked?'blocked':'',
+    p.role?('role='+p.role):'', (p.muted?'muted':''), (p.removed?'removed':''),
+    p.walletAddress?'wallet':'', p.avatar?'avatar':''].filter(Boolean).join(' · ');
+  return '<div class="msg"><div class="who">'+esc(p.ship)+'</div>'
+    +'<div class="muted" style="font-size:.72rem">'+esc(bits)+'</div></div>';
+}
+async function readProfile(){
+  const ship=($('profShip').value||'').trim();
+  if(!ship){setStatus('enter a ~ship','err');return}
+  setStatus('scry /api/profile/'+ship+' …');
+  try{
+    const res=await api.scry('noltbook','/api/profile/'+encodeURIComponent(ship));
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,12000);
+    $('people').innerHTML=personLine(res);
+    setStatus('profile ok · '+res.ship+' · known='+res.known,'ok');
+  }catch(e){setStatus('profile: '+e.message+' (invalid ship?)','err');$('debug').textContent=String(e)}
+}
+async function readContacts(){
+  setStatus('scry /api/contacts …');
+  try{
+    const res=await api.scry('noltbook','/api/contacts');
+    const cs=(res&&res.contacts)||[];
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,12000);
+    $('people').innerHTML='<div class="muted" style="font-size:.74rem">'+cs.length+' contacts</div>'+cs.map(personLine).join('');
+    setStatus(cs.length+' contacts','ok');
+  }catch(e){setStatus(e.message,'err');$('debug').textContent=String(e)}
+}
+async function readMembers(){
+  if(!selected){setStatus('select/create a note first','err');return}
+  setStatus('scry /api/notes/'+selected+'/members …');
+  try{
+    const res=await api.scry('noltbook','/api/notes/'+encodeURIComponent(selected)+'/members');
+    const ms=(res&&res.members)||[];
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,12000);
+    $('people').innerHTML='<div class="muted" style="font-size:.74rem">note '+esc(res.noteId||selected)+' · '+ms.length+' members</div>'+ms.map(personLine).join('');
+    setStatus(ms.length+' members','ok');
+  }catch(e){setStatus('members: '+e.message+' (note exists?)','err');$('debug').textContent=String(e)}
+}
+</script>
+</body>
+</html>
