@@ -169,6 +169,29 @@ resolvable host), `rejected` (not allowed for this note/user). Mod ops
 as the **creator** they apply locally and return the durable code. `make-admin`/
 `remove-admin` are creator-only. The target ship is named in the result `message`.
 
+### Pins
+
+Generic pinned entries: a host/admin pins a message or a real `%file`/`%app` artifact
+to the top of a **notebook/group** note. `target` is the entry's `eid` (`%uv` string).
+Everyone who can see the note sees the pins; only host/admin manage them. Capped at 5
+per note. `%code` artifacts, DMs, cover, gossip, and rumors are not pinnable in Phase 1.
+
+| action | data | result |
+|---|---|---|
+| `pin-entry` | `{ noteId, target, kind:"message"\|"artifact" }` | `pinned` / `accepted` / `missing-note` / `unsupported` / `invalid-target` / `missing-target` / `pin-limit` / `rejected` |
+| `unpin-entry` | `{ noteId, target }` | `unpinned` / `accepted` / `missing-note` / `unsupported` / `invalid-target` / `rejected` |
+
+`invalid-target` = the `target` string didn't parse (or `kind` was bad); `missing-target`
+= a valid eid that doesn't resolve to a pinnable entry in that note; `unsupported` = the
+note type can't hold pins; `pin-limit` = already 5 pins (the 6th is rejected, state
+unchanged). Re-pinning an already-pinned target is idempotent (`pinned`, no duplicate).
+Host is authoritative: on a note **you host**, the change applies locally and returns the
+durable `pinned`/`unpinned`. As an **admin on a member ship** the action is forwarded to
+the host (which re-validates) and returns `accepted` — read `/api/notes/<id>` back to
+confirm. The result `eid` field echoes the target. Pins ride a `pins-updated` fact to the
+frontend and remote members; deleting a pinned message/artifact prunes the pin
+automatically.
+
 ### Profile / contacts / pals
 
 | action | data | success code |
@@ -254,7 +277,7 @@ internal `/notes` update shapes so they stay stable across UI changes.
 | path | returns |
 |---|---|
 | `/api/notes` | `{ notes: [ { id, name, type, creator, visibility, userCount, lastPreview } ] }` |
-| `/api/notes/<id>` | `{ noteId, messages: [ { id, msgId, author, text, timestamp, edited, eid, replyToEid, via } ], artifacts: [ { id, name, type, creator, noteId, eid, replyToEid, created, updated, versionCount, latestVersion, latestEditor, latestTimestamp, mime, kind, size, url, downloadUrl, via } ] }` |
+| `/api/notes/<id>` | `{ noteId, messages: [ { id, msgId, author, text, timestamp, edited, eid, replyToEid, via } ], artifacts: [ { id, name, type, creator, noteId, eid, replyToEid, created, updated, versionCount, latestVersion, latestEditor, latestTimestamp, mime, kind, size, url, downloadUrl, via } ], pins: [ { target, kind, pinnedBy, pinnedAt, resolved, summary, author } ] }` |
 | `/api/artifacts/<id>` | `{ artifact: { …artifact fields…, via, versions: [ { version, content, editor, timestamp } ] } }` |
 | `/api/profile/<ship>` | `{ ship, known, displayName, avatar, walletAddress, azimuthAddress, palStatus, isContact, isBlocked }` |
 | `/api/contacts` | `{ contacts: [ …profile fields… ] }` |
@@ -290,6 +313,7 @@ The harness is laid out section-by-section; each maps to one part of the API:
 - **Notes** — List Notes; Create / Find `api-test`; Read Recent / Meta / Capabilities.
 - **Messages** — Post Text Message; per-row Edit / Delete; Post App Reference.
 - **Artifacts** — Create Artifact (code/app); Detail; Edit / Delete on the selected artifact.
+- **Pins** — in Read Recent, Pin/Unpin a message or `%file`/`%app` artifact row; the pins block lists current pins (oldest first) with Unpin. Verify: pin message/file/app, multiple pins order oldest-first, the 6th pin returns `pin-limit`, re-pin is idempotent, a plain member is `rejected`, an admin succeeds, deleting a pinned target removes the pin.
 - **Profile / Contacts / Pals** — Read Profile / Contacts / Members; Update Profile (null checkbox per field); Add/Remove Contact; Add/Remove/Block/Unblock Pal.
 - **Membership / Admin** — request join, add/remove member, approve/deny/deny+block, mute/unmute, make/remove admin.
 - **Note Config** — name / visibility / writable / headline → Set Selected Note Config.

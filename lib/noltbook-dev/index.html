@@ -492,6 +492,8 @@ $('recent').addEventListener('click',ev=>{
     if(act==='edit')startEdit(+btn.dataset.i);
     else if(act==='delete')deleteMessage(+btn.dataset.i);
     else if(act==='detail')readArtifact(btn.dataset.artId);
+    else if(act==='pin')doPin(btn.dataset.target,btn.dataset.kind);
+    else if(act==='unpin')doUnpin(btn.dataset.target);
     return;
   }
   const mrow=ev.target.closest('.msg[data-kind="msg"]');
@@ -538,8 +540,34 @@ async function postAppRef(){
 // message by position (avoids quoting @da/@uv ids into onclick attributes).
 let lastMsgs=[];
 let lastArts=[];
+let lastPins=[];
 // {type:'message', msgId, eid} | {type:'artifact', id} | null
 let selectedEntry=null;
+function isPinnedEid(eid){return !!eid&&lastPins.some(p=>p.target===eid)}
+async function doPin(target,kind){
+  if(!selected||!target){setStatus('need note + target eid','err');return}
+  setStatus('poke pin-entry …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'pin-entry',requestId:nextReq(),data:{noteId:selected,target,kind}});
+    if(!ok){setStatus('pin-entry poke failed','err');return}
+    await sleep(400); setStatus('pin sent.','ok'); readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function doUnpin(target){
+  if(!selected||!target){setStatus('need note + target eid','err');return}
+  setStatus('poke unpin-entry …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'unpin-entry',requestId:nextReq(),data:{noteId:selected,target}});
+    if(!ok){setStatus('unpin-entry poke failed','err');return}
+    await sleep(400); setStatus('unpin sent.','ok'); readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
+function pinBtnRow(eid,kind){
+  if(!eid)return'';
+  return isPinnedEid(eid)
+    ?'<button data-act="unpin" data-target="'+esc(eid)+'">Unpin</button>'
+    :'<button data-act="pin" data-target="'+esc(eid)+'" data-kind="'+esc(kind)+'">Pin</button>';
+}
 // eid-first, msgId-fallback: send whichever ids the read API gave us; the
 // backend resolves the same target and returns the resolved msgId/eid.
 function msgRef(m){const d={}; if(m.eid)d.eid=m.eid; if(m.msgId)d.msgId=m.msgId; return d}
@@ -575,25 +603,38 @@ function msgIsSel(m){return selectedEntry&&selectedEntry.type==='message'&&(sele
 function artIsSel(a){return selectedEntry&&selectedEntry.type==='artifact'&&selectedEntry.id===a.id}
 // re-paint rows + selected-entry detail from in-memory lastMsgs/lastArts (no scry)
 function paintRecent(){
-  let h='<div class="muted" style="font-size:.74rem">showing last '+lastMsgs.length+' messages, '+lastArts.length+' artifacts</div>';
+  let h='<div class="muted" style="font-size:.74rem">showing last '+lastMsgs.length+' messages, '+lastArts.length+' artifacts, '+lastPins.length+' pins</div>';
+  if(lastPins.length){
+    h+='<div class="muted" style="font-size:.74rem;margin-top:.3rem">pins (oldest first):</div>';
+    lastPins.slice().sort((a,b)=>(a.pinnedAt||0)-(b.pinnedAt||0)).forEach(p=>{
+      h+='<div class="msg" style="border-color:var(--amber)">'
+        +'<div class="who">📌 '+esc(p.kind)+(p.author?(' · '+esc(p.author)):'')+(p.resolved?'':' · <span style="color:#e66">(deleted)</span>')+'</div>'
+        +'<div class="body">'+esc(p.summary||'(no summary)')+'</div>'
+        +'<div class="muted" style="font-size:.7rem">target '+esc(p.target)+' · by '+esc(p.pinnedBy||'')+'</div>'
+        +'<div class="row" style="margin:.2rem 0 0"><button data-act="unpin" data-target="'+esc(p.target)+'">Unpin</button></div></div>';
+    });
+  }
   lastMsgs.forEach((m,i)=>{
     h+='<div class="msg click'+(msgIsSel(m)?' on':'')+'" data-kind="msg" data-i="'+i+'">'
-      +'<div class="who">'+esc(m.author)+' · '+new Date(m.timestamp).toLocaleTimeString()+(m.edited?' · edited':'')+'</div>'
+      +'<div class="who">'+esc(m.author)+' · '+new Date(m.timestamp).toLocaleTimeString()+(m.edited?' · edited':'')+(isPinnedEid(m.eid)?' · 📌':'')+'</div>'
       +'<div class="body">'+esc(m.text)+'</div>'
       +'<div class="muted" style="font-size:.7rem">msgId '+esc(m.msgId||'')+(m.eid?' · eid '+esc(m.eid):'')
         +(m.via?(' · <span style="color:var(--amber)">'+esc(viaText(m.via))+'</span>'):'')+'</div>'
       +'<div class="row" style="margin:.2rem 0 0">'
       +'<button data-act="edit" data-i="'+i+'">Edit</button>'
-      +'<button data-act="delete" data-i="'+i+'">Delete</button></div></div>';
+      +'<button data-act="delete" data-i="'+i+'">Delete</button>'
+      +pinBtnRow(m.eid,'message')+'</div></div>';
   });
   if(lastArts.length){
     h+='<div class="muted" style="font-size:.74rem;margin-top:.4rem">artifacts:</div>';
     lastArts.forEach((a,i)=>{
       const bits=[a.type,a.creator,a.versionCount?('v'+a.latestVersion+'/'+a.versionCount):'',a.mime||a.kind||''].filter(Boolean).join(' · ');
+      const canPin=(a.type==='file'||a.type==='app');
       h+='<div class="msg click'+(artIsSel(a)?' on':'')+'" data-kind="art" data-art-id="'+esc(a.id)+'">'
-        +'<div class="who">'+esc(a.name||a.id)+(a.via?(' · <span style="color:var(--amber)">'+esc(viaText(a.via))+'</span>'):'')+'</div>'
+        +'<div class="who">'+esc(a.name||a.id)+(isPinnedEid(a.eid)?' · 📌':'')+(a.via?(' · <span style="color:var(--amber)">'+esc(viaText(a.via))+'</span>'):'')+'</div>'
         +'<div class="muted" style="font-size:.72rem">'+esc(bits)+'</div>'
-        +'<button data-act="detail" data-art-id="'+esc(a.id)+'" style="margin-top:.25rem">Detail</button></div>';
+        +'<div class="row" style="margin-top:.25rem"><button data-act="detail" data-art-id="'+esc(a.id)+'">Detail</button>'
+        +(canPin?pinBtnRow(a.eid,'artifact'):'')+'</div></div>';
     });
   }
   $('recent').innerHTML=h;
@@ -634,6 +675,7 @@ async function readRecent(){
     const res=await api.scry('noltbook','/api/notes/'+selected);
     const msgs=(res&&res.messages)||[];
     lastArts=(res&&res.artifacts)||[];
+    lastPins=(res&&res.pins)||[];
     lastMsgs=msgs.slice(-10);
     // keep the current selection if its target still exists; else clear it
     if(selectedEntry&&selectedEntry.type==='message'&&!lastMsgs.some(msgIsSel))selectedEntry=null;
