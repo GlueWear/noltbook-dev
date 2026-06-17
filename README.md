@@ -136,6 +136,8 @@ Ship/host arguments are raw text, parsed server-side — a bad value returns
 | `set-note-app` | `{ noteId, app: null \| { desk, title?, publisher?, tag?, template? } }` | `app-set` / `app-cleared` / `missing-note` / `invalid-desk` / `invalid-publisher` / `invalid-template` / `invalid-app` / `rejected` / `unsupported` |
 | `set-note-pin` | `{ noteId, target, kind:"message"\|"artifact" }` | `pin-set` / `missing-note` / `invalid-target` / `missing-target` / `unsupported` / `rejected` |
 | `clear-note-pin` | `{ noteId }` | `pin-cleared` / `missing-note` / `unsupported` / `rejected` |
+| `set-note-active` | top-level `app` + `{ noteId, label?, count?, ttl? }` | `active-set` / `missing-app` / `missing-note` / `unsupported` / `rejected` |
+| `clear-note-active` | `{ noteId }` | `active-cleared` / `missing-note` / `unsupported` / `rejected` |
 
 `set-note-config` changes only the fields you include (fans out to `rename-note` /
 `set-note-meta` / `set-headline`, one result fact). `visibility` is `public`/`private`/
@@ -161,7 +163,7 @@ Gate: the note must exist, be **notebook/group/gossip** (cover/ars-rumors/DM are
 `app` field on `/api/notes`, `/api/notes/<id>`, and `/api/notes/<id>/meta` (`null` when
 absent). Noltbook does not execute `template` actions yet.
 
-**Pin** (`set-note-pin` / `clear-note-pin`) is the **one active pin per note** — an
+**Pin** (`set-note-pin` / `clear-note-pin`) is the **one pin per note** — an
 optional placement that renders in the stable pinned surface above the chat, **not a new
 artifact/note type**. The target is either a **message** (`kind:"message"`, by the
 message's `meta.eid`) or a **`%file`/`%app` artifact** (`kind:"artifact"`, by the
@@ -182,6 +184,24 @@ pin: null
 ```
 
 Resolved fields are filled at read time and may be `null` if the target is gone.
+
+**Active** (`set-note-active` / `clear-note-active`) is a developer/API-only note "live"
+status (e.g. "5 listening", "playing", "live") — separate from calls, with **one active
+status per note**. `set-note-active` **requires top-level `app` attribution** (the
+`{ app: { desk, … } }` on the poke) and returns `missing-app` without it; `desk`/`title`/
+`publisher` are server-stamped from it, as are `setBy`/`updatedAt`/`expiresAt`. Gate: note
+exists, is **notebook/group/gossip** (`unsupported` otherwise), not write-blocked, and the
+caller is the note **creator/host** (admins/members rejected). It's a **TTL heartbeat**:
+`ttl` is seconds (default 120, capped 600) — apps re-set before expiry, and a stopped app
+auto-expires. `label` defaults to `"live"` and caps at 32 chars; `count` is optional and
+caps at 999. Active **broadcasts live** (`%note-active-updated`) and a re-subscribing
+member gets a snapshot of unexpired entries. Read it back via the `active` field on
+`/api/notes`, `/api/notes/<id>`, and `/api/notes/<id>/meta` (`null` when absent **or
+expired**):
+
+```text
+active: null | { desk, title, publisher, label, count, setBy, updatedAt, expiresAt }
+```
 
 ### Messages
 
@@ -321,13 +341,13 @@ internal `/notes` update shapes so they stay stable across UI changes.
 
 | path | returns |
 |---|---|
-| `/api/notes` | `{ notes: [ { id, name, type, creator, visibility, userCount, lastPreview, app } ] }` |
-| `/api/notes/<id>` | `{ noteId, messages: [ { id, msgId, author, text, timestamp, edited, eid, replyToEid, via } ], artifacts: [ { id, name, type, creator, noteId, eid, replyToEid, created, updated, versionCount, latestVersion, latestEditor, latestTimestamp, mime, kind, size, url, downloadUrl, via } ], app, pin }` |
+| `/api/notes` | `{ notes: [ { id, name, type, creator, visibility, userCount, lastPreview, app, active } ] }` |
+| `/api/notes/<id>` | `{ noteId, messages: [ { id, msgId, author, text, timestamp, edited, eid, replyToEid, via } ], artifacts: [ { id, name, type, creator, noteId, eid, replyToEid, created, updated, versionCount, latestVersion, latestEditor, latestTimestamp, mime, kind, size, url, downloadUrl, via } ], app, pin, active }` |
 | `/api/artifacts/<id>` | `{ artifact: { …artifact fields…, via, versions: [ { version, content, editor, timestamp } ] } }` |
 | `/api/profile/<ship>` | `{ ship, known, displayName, avatar, walletAddress, azimuthAddress, palStatus, isContact, isBlocked }` |
 | `/api/contacts` | `{ contacts: [ …profile fields… ] }` |
 | `/api/notes/<id>/members` | `{ noteId, members: [ …profile fields…, role, muted, removed ] }` |
-| `/api/notes/<id>/meta` | `{ id, name, type, creator, visibility, writable, parent, children, userCount, removedCount, iconUrl, headline, lastAuthor, lastPreview, hostStatus, activity, read, forkOrigin, forkVersion, forkOf, memberRev, app, pin, capabilities: {…} }` |
+| `/api/notes/<id>/meta` | `{ id, name, type, creator, visibility, writable, parent, children, userCount, removedCount, iconUrl, headline, lastAuthor, lastPreview, hostStatus, activity, read, forkOrigin, forkVersion, forkOf, memberRev, app, pin, active, capabilities: {…} }` |
 | `/api/notes/<id>/capabilities` | `{ noteId, …capability flags… }` |
 | `/api/fork-invites` | `{ forkInvites: [ { rootId, sourceName, sourceVersion, forker, fetching } ] }` |
 | `/api/calls` | `{ calls: [ <call> ] }` |
@@ -358,7 +378,8 @@ The harness is laid out section-by-section; each maps to one part of the API:
 - **Notes** — List Notes; Create / Find `api-test`; Read Recent / Meta / Capabilities.
 - **Messages** — Post Text Message; per-row Edit / Delete; Post App Reference.
 - **Artifacts** — Create Artifact (code/app); Detail; Edit / Delete on the selected artifact.
-- **Pin** — in Read Recent, Pin a message or `%file`/`%app` artifact row (one active pin per note); the active-pin block shows kind/target/pinnedBy with Clear Pin. Verify: pin a message, pin a `%file`/`%app` artifact (`%code` has no Pin button), setting a new target **replaces** the pin, `clear-note-pin` clears it, a non-creator is `rejected`, and deleting the pinned target auto-clears the pin. Read Meta shows the `pin` line.
+- **Pin** — in Read Recent, Pin a message or `%file`/`%app` artifact row (one pin per note); the pinned-item block shows kind/target/pinnedBy with Clear Pin. Verify: pin a message, pin a `%file`/`%app` artifact (`%code` has no Pin button), setting a new target **replaces** the pin, `clear-note-pin` clears it, a non-creator is `rejected`, and deleting the pinned target auto-clears the pin. Read Meta shows the `pin` line.
+- **Active** — *Active* card: Set Active (label/count/ttl; sends top-level `app:APP`) → `active-set`; Read Recent/Meta show the `active` line and the sidebar shows an amber badge. Verify: count+label render (e.g. "5 listening"), after `ttl` seconds the read shows `active:null` (expiry filter), Clear Active → `active-cleared`. A `set-note-active` without `app` returns `missing-app` (the harness always sends `APP`, so test that path via the debug console/docs); a non-creator returns `rejected`.
 - **Profile / Contacts / Pals** — Read Profile / Contacts / Members; Update Profile (null checkbox per field); Add/Remove Contact; Add/Remove/Block/Unblock Pal.
 - **Membership / Admin** — request join, add/remove member, approve/deny/deny+block, mute/unmute, make/remove admin.
 - **Note Config** — name / visibility / writable / headline → Set Selected Note Config.

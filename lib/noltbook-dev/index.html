@@ -221,6 +221,25 @@
   </div>
 
   <div class="card">
+    <h2>8c &middot; ACTIVE (set-note-active)</h2>
+    <p class="hint">Developer/API-only note "live" status (separate from calls).
+    Requires top-level <code>app</code> attribution (harness sends <code>APP</code>).
+    Creator/host only; notebook/group/gossip notes. TTL heartbeat in seconds
+    (default 120, cap 600); label caps at 32 (empty &rarr; "live"); count caps at 999.
+    Reads appear as <code>active</code> in <code>/api/notes</code> and
+    <code>/api/notes/&lt;id&gt;/meta</code>.</p>
+    <div class="row">
+      <input id="activeLabel" placeholder="label" value="listening" size="14">
+      <input id="activeCount" placeholder="count" type="number" size="6">
+      <input id="activeTtl" placeholder="ttl (s)" value="120" type="number" size="6">
+    </div>
+    <div class="row">
+      <button class="primary" onclick="setNoteActive()">Set Active</button>
+      <button onclick="clearNoteActive()">Clear Active</button>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>9 &middot; ARTIFACT CREATE</h2>
     <p class="hint">Poke <code>create-artifact</code> (code/app only — no raw file
     upload in 12A) into the <b>selected note</b>, with APP attribution. Result shows
@@ -560,6 +579,8 @@ let lastMsgs=[];
 let lastArts=[];
 // one active pin per note (set/clear-note-pin); creator/host only.
 let lastPin=null;
+// developer/API-only note "active" status (set/clear-note-active).
+let lastActive=null;
 // {type:'message', msgId, eid} | {type:'artifact', id} | null
 let selectedEntry=null;
 function isPinnedEid(eid){return !!eid&&!!lastPin&&lastPin.target===eid}
@@ -579,6 +600,29 @@ async function doClearPin(){
     const ok=await api.poke('noltbook','noltbook-api',{action:'clear-note-pin',requestId:nextReq(),data:{noteId:selected}});
     if(!ok){setStatus('clear-note-pin poke failed','err');return}
     await sleep(400); setStatus('pin cleared.','ok'); readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
+// set-note-active requires top-level app attribution (APP); label/count/ttl optional.
+async function setNoteActive(){
+  if(!selected){setStatus('select/create a note first','err');return}
+  const data={noteId:selected};
+  const label=$('activeLabel').value.trim(); if(label)data.label=label;
+  const count=$('activeCount').value.trim(); if(count!=='')data.count=parseInt(count,10);
+  const ttl=$('activeTtl').value.trim();     if(ttl!=='')data.ttl=parseInt(ttl,10);
+  setStatus('poke set-note-active …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'set-note-active',requestId:nextReq(),app:APP,data});
+    if(!ok){setStatus('set-note-active poke failed','err');return}
+    await sleep(400); setStatus('active set.','ok'); readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function clearNoteActive(){
+  if(!selected){setStatus('select/create a note first','err');return}
+  setStatus('poke clear-note-active …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'clear-note-active',requestId:nextReq(),data:{noteId:selected}});
+    if(!ok){setStatus('clear-note-active poke failed','err');return}
+    await sleep(400); setStatus('active cleared.','ok'); readRecent();
   }catch(e){setStatus(e.message,'err')}
 }
 // kind 'message' or 'artifact' (%code never passed). Setting replaces the pin.
@@ -623,13 +667,13 @@ function msgIsSel(m){return selectedEntry&&selectedEntry.type==='message'&&(sele
 function artIsSel(a){return selectedEntry&&selectedEntry.type==='artifact'&&selectedEntry.id===a.id}
 // re-paint rows + selected-entry detail from in-memory lastMsgs/lastArts (no scry)
 function paintRecent(){
-  let h='<div class="muted" style="font-size:.74rem">showing last '+lastMsgs.length+' messages, '+lastArts.length+' artifacts · '+(lastPin?'1 active pin':'no pin')+'</div>';
+  let h='<div class="muted" style="font-size:.74rem">showing last '+lastMsgs.length+' messages, '+lastArts.length+' artifacts · '+(lastPin?'1 pinned item':'no pin')+(lastActive?(' · active: '+(lastActive.count!=null?esc(''+lastActive.count)+' ':'')+esc(lastActive.label||'live')+' via %'+esc(lastActive.desk)):'')+'</div>';
   if(lastPin){
     const p=lastPin;
     const summary=(p.kind==='message')
       ?((p.author?esc(p.author)+': ':'')+esc(p.preview||'(message gone)'))
       :((p.artifactName?esc(p.artifactName):'(artifact gone)')+(p.artifactType?(' ['+esc(p.artifactType)+']'):''));
-    h+='<div class="muted" style="font-size:.74rem;margin-top:.3rem">active pin:</div>'
+    h+='<div class="muted" style="font-size:.74rem;margin-top:.3rem">pinned item:</div>'
       +'<div class="msg" style="border-color:var(--amber)">'
       +'<div class="who">📌 '+esc(p.kind)+'</div>'
       +'<div class="body">'+summary+'</div>'
@@ -698,6 +742,7 @@ async function readRecent(){
     const msgs=(res&&res.messages)||[];
     lastArts=(res&&res.artifacts)||[];
     lastPin=(res&&res.pin)||null;
+    lastActive=(res&&res.active)||null;
     lastMsgs=msgs.slice(-10);
     // keep the current selection if its target still exists; else clear it
     if(selectedEntry&&selectedEntry.type==='message'&&!lastMsgs.some(msgIsSel))selectedEntry=null;
@@ -749,6 +794,11 @@ async function readMeta(){
           ?((res.pin.author?esc(res.pin.author)+': ':'')+esc(res.pin.preview||res.pin.target))
           :(esc(res.pin.artifactName||res.pin.target)+(res.pin.artifactType?(' ['+esc(res.pin.artifactType)+']'):'')))
           +' · by '+esc(res.pin.pinnedBy))
+        :'none')+'</div>'
+      +'<div class="muted" style="font-size:.72rem">active: '+(res.active
+        ?((res.active.count!=null?esc(''+res.active.count)+' ':'')+esc(res.active.label||'live')
+          +' via %'+esc(res.active.desk)
+          +(res.active.expiresAt?(' · expires '+new Date(res.active.expiresAt).toLocaleTimeString()):''))
         :'none')+'</div>'
       +'<div class="muted" style="font-size:.72rem">'+esc(capLine(c))+'</div></div>';
     setStatus('meta ok · '+(res.name||res.id),'ok');
