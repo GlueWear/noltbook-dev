@@ -203,6 +203,24 @@
   </div>
 
   <div class="card">
+    <h2>8b &middot; APP METADATA (set-note-app)</h2>
+    <p class="hint">Durable note-level association with a Noltbook-capable app
+    (<b>not</b> a note type). Creator/admin only; notebook/group/gossip notes.
+    Reads appear as <code>app</code> in <code>/api/notes</code> and
+    <code>/api/notes/&lt;id&gt;/meta</code>. <code>app:null</code> clears.</p>
+    <div class="row">
+      <input id="appDesk" placeholder="desk" value="noltbook-dev" size="14">
+      <input id="appTitle" placeholder="title" value="Noltbook Dev" size="14">
+      <input id="appTag" placeholder="tag" value="dev-example" size="12">
+      <input id="appTemplate" placeholder="template" value="example-note" size="12">
+    </div>
+    <div class="row">
+      <button class="primary" onclick="setNoteApp()">Set App Metadata</button>
+      <button onclick="clearNoteApp()">Clear App Metadata</button>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>9 &middot; ARTIFACT CREATE</h2>
     <p class="hint">Poke <code>create-artifact</code> (code/app only — no raw file
     upload in 12A) into the <b>selected note</b>, with APP attribution. Result shows
@@ -492,8 +510,8 @@ $('recent').addEventListener('click',ev=>{
     if(act==='edit')startEdit(+btn.dataset.i);
     else if(act==='delete')deleteMessage(+btn.dataset.i);
     else if(act==='detail')readArtifact(btn.dataset.artId);
-    else if(act==='pin')doPin(btn.dataset.target,btn.dataset.kind);
-    else if(act==='unpin')doUnpin(btn.dataset.target);
+    else if(act==='pin')doSetPin(btn.dataset.target,btn.dataset.kind);
+    else if(act==='clear-pin')doClearPin();
     return;
   }
   const mrow=ev.target.closest('.msg[data-kind="msg"]');
@@ -540,32 +558,34 @@ async function postAppRef(){
 // message by position (avoids quoting @da/@uv ids into onclick attributes).
 let lastMsgs=[];
 let lastArts=[];
-let lastPins=[];
+// one active pin per note (set/clear-note-pin); creator/host only.
+let lastPin=null;
 // {type:'message', msgId, eid} | {type:'artifact', id} | null
 let selectedEntry=null;
-function isPinnedEid(eid){return !!eid&&lastPins.some(p=>p.target===eid)}
-async function doPin(target,kind){
+function isPinnedEid(eid){return !!eid&&!!lastPin&&lastPin.target===eid}
+async function doSetPin(target,kind){
   if(!selected||!target){setStatus('need note + target eid','err');return}
-  setStatus('poke pin-entry …');
+  setStatus('poke set-note-pin …');
   try{
-    const ok=await api.poke('noltbook','noltbook-api',{action:'pin-entry',requestId:nextReq(),data:{noteId:selected,target,kind}});
-    if(!ok){setStatus('pin-entry poke failed','err');return}
-    await sleep(400); setStatus('pin sent.','ok'); readRecent();
+    const ok=await api.poke('noltbook','noltbook-api',{action:'set-note-pin',requestId:nextReq(),data:{noteId:selected,target,kind}});
+    if(!ok){setStatus('set-note-pin poke failed','err');return}
+    await sleep(400); setStatus('pin set.','ok'); readRecent();
   }catch(e){setStatus(e.message,'err')}
 }
-async function doUnpin(target){
-  if(!selected||!target){setStatus('need note + target eid','err');return}
-  setStatus('poke unpin-entry …');
+async function doClearPin(){
+  if(!selected){setStatus('select/create a note first','err');return}
+  setStatus('poke clear-note-pin …');
   try{
-    const ok=await api.poke('noltbook','noltbook-api',{action:'unpin-entry',requestId:nextReq(),data:{noteId:selected,target}});
-    if(!ok){setStatus('unpin-entry poke failed','err');return}
-    await sleep(400); setStatus('unpin sent.','ok'); readRecent();
+    const ok=await api.poke('noltbook','noltbook-api',{action:'clear-note-pin',requestId:nextReq(),data:{noteId:selected}});
+    if(!ok){setStatus('clear-note-pin poke failed','err');return}
+    await sleep(400); setStatus('pin cleared.','ok'); readRecent();
   }catch(e){setStatus(e.message,'err')}
 }
+// kind 'message' or 'artifact' (%code never passed). Setting replaces the pin.
 function pinBtnRow(eid,kind){
   if(!eid)return'';
   return isPinnedEid(eid)
-    ?'<button data-act="unpin" data-target="'+esc(eid)+'">Unpin</button>'
+    ?'<button data-act="clear-pin" data-target="'+esc(eid)+'">Clear Pin</button>'
     :'<button data-act="pin" data-target="'+esc(eid)+'" data-kind="'+esc(kind)+'">Pin</button>';
 }
 // eid-first, msgId-fallback: send whichever ids the read API gave us; the
@@ -603,16 +623,18 @@ function msgIsSel(m){return selectedEntry&&selectedEntry.type==='message'&&(sele
 function artIsSel(a){return selectedEntry&&selectedEntry.type==='artifact'&&selectedEntry.id===a.id}
 // re-paint rows + selected-entry detail from in-memory lastMsgs/lastArts (no scry)
 function paintRecent(){
-  let h='<div class="muted" style="font-size:.74rem">showing last '+lastMsgs.length+' messages, '+lastArts.length+' artifacts, '+lastPins.length+' pins</div>';
-  if(lastPins.length){
-    h+='<div class="muted" style="font-size:.74rem;margin-top:.3rem">pins (oldest first):</div>';
-    lastPins.slice().sort((a,b)=>(a.pinnedAt||0)-(b.pinnedAt||0)).forEach(p=>{
-      h+='<div class="msg" style="border-color:var(--amber)">'
-        +'<div class="who">📌 '+esc(p.kind)+(p.author?(' · '+esc(p.author)):'')+(p.resolved?'':' · <span style="color:#e66">(deleted)</span>')+'</div>'
-        +'<div class="body">'+esc(p.summary||'(no summary)')+'</div>'
-        +'<div class="muted" style="font-size:.7rem">target '+esc(p.target)+' · by '+esc(p.pinnedBy||'')+'</div>'
-        +'<div class="row" style="margin:.2rem 0 0"><button data-act="unpin" data-target="'+esc(p.target)+'">Unpin</button></div></div>';
-    });
+  let h='<div class="muted" style="font-size:.74rem">showing last '+lastMsgs.length+' messages, '+lastArts.length+' artifacts · '+(lastPin?'1 active pin':'no pin')+'</div>';
+  if(lastPin){
+    const p=lastPin;
+    const summary=(p.kind==='message')
+      ?((p.author?esc(p.author)+': ':'')+esc(p.preview||'(message gone)'))
+      :((p.artifactName?esc(p.artifactName):'(artifact gone)')+(p.artifactType?(' ['+esc(p.artifactType)+']'):''));
+    h+='<div class="muted" style="font-size:.74rem;margin-top:.3rem">active pin:</div>'
+      +'<div class="msg" style="border-color:var(--amber)">'
+      +'<div class="who">📌 '+esc(p.kind)+'</div>'
+      +'<div class="body">'+summary+'</div>'
+      +'<div class="muted" style="font-size:.7rem">target '+esc(p.target)+' · by '+esc(p.pinnedBy||'')+(p.pinnedAt?(' · at '+new Date(p.pinnedAt).toLocaleTimeString()):'')+'</div>'
+      +'<div class="row" style="margin:.2rem 0 0"><button data-act="clear-pin">Clear Pin</button></div></div>';
   }
   lastMsgs.forEach((m,i)=>{
     h+='<div class="msg click'+(msgIsSel(m)?' on':'')+'" data-kind="msg" data-i="'+i+'">'
@@ -675,7 +697,7 @@ async function readRecent(){
     const res=await api.scry('noltbook','/api/notes/'+selected);
     const msgs=(res&&res.messages)||[];
     lastArts=(res&&res.artifacts)||[];
-    lastPins=(res&&res.pins)||[];
+    lastPin=(res&&res.pin)||null;
     lastMsgs=msgs.slice(-10);
     // keep the current selection if its target still exists; else clear it
     if(selectedEntry&&selectedEntry.type==='message'&&!lastMsgs.some(msgIsSel))selectedEntry=null;
@@ -715,6 +737,19 @@ async function readMeta(){
       +' · writable='+res.writable+' · users='+res.userCount+' · removed='+res.removedCount
       +' · children='+((res.children||[]).length)+(res.hostStatus?(' · host='+esc(res.hostStatus)):'')
       +(res.forkVersion?(' · forkV'+res.forkVersion):'')+'</div>'
+      +'<div class="muted" style="font-size:.72rem">app: '+(res.app
+        ?('%'+esc(res.app.desk)+(res.app.title?(' "'+esc(res.app.title)+'"'):'')
+          +(res.app.tag?(' · tag '+esc(res.app.tag)):'')
+          +(res.app.template?(' · template '+esc(res.app.template)):'')
+          +(res.app.publisher?(' · pub '+esc(res.app.publisher)):'')
+          +' · by '+esc(res.app.createdBy))
+        :'none')+'</div>'
+      +'<div class="muted" style="font-size:.72rem">pin: '+(res.pin
+        ?(esc(res.pin.kind)+' · '+(res.pin.kind==='message'
+          ?((res.pin.author?esc(res.pin.author)+': ':'')+esc(res.pin.preview||res.pin.target))
+          :(esc(res.pin.artifactName||res.pin.target)+(res.pin.artifactType?(' ['+esc(res.pin.artifactType)+']'):'')))
+          +' · by '+esc(res.pin.pinnedBy))
+        :'none')+'</div>'
       +'<div class="muted" style="font-size:.72rem">'+esc(capLine(c))+'</div></div>';
     setStatus('meta ok · '+(res.name||res.id),'ok');
   }catch(e){setStatus('meta: '+e.message+' (note exists?)','err');$('debug').textContent=String(e)}
@@ -969,6 +1004,29 @@ async function setNoteConfig(){
     await sleep(400);
     setStatus('config sent.','ok');
     readMeta();  // re-read so name/visibility/writable/headline changes are visible
+  }catch(e){setStatus(e.message,'err')}
+}
+// ---- durable app-note metadata (set-note-app) ----
+async function setNoteApp(){
+  if(!selected){setStatus('select/create a note first','err');return}
+  const app={desk:$('appDesk').value.trim()};
+  const t=$('appTitle').value.trim();    if(t) app.title=t;
+  const g=$('appTag').value.trim();      if(g) app.tag=g;
+  const tm=$('appTemplate').value.trim();if(tm) app.template=tm;
+  setStatus('poke set-note-app (set) …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'set-note-app',requestId:nextReq(),data:{noteId:selected,app}});
+    if(!ok){setStatus('set-note-app poke failed','err');return}
+    await sleep(400); setStatus('app metadata set.','ok'); readMeta();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function clearNoteApp(){
+  if(!selected){setStatus('select/create a note first','err');return}
+  setStatus('poke set-note-app (clear) …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'set-note-app',requestId:nextReq(),data:{noteId:selected,app:null}});
+    if(!ok){setStatus('set-note-app poke failed','err');return}
+    await sleep(400); setStatus('app metadata cleared.','ok'); readMeta();
   }catch(e){setStatus(e.message,'err')}
 }
 // ---- Phase 15: profile / contact / pal mutations ----

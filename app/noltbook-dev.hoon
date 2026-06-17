@@ -34,6 +34,22 @@
       :_  this
       %+  give-simple-payload:app:server  eyre-id
       (login-redirect:gen:server request.inbound-request)
+    ::  Noltbook app manifest (read-only discovery). Noltbook's Apps tab fetches
+    ::  /apps/<desk>/noltbook.json per installed desk; a valid manifest groups the
+    ::  app under NOLTBOOK APPS and shows the NOLTBOOK APP capability panel. This
+    ::  is display-only — Noltbook does not execute these actions yet.
+    =/  url-tape=tape  (trip url.request.inbound-request)
+    =/  path-tape=tape
+      =/  q  (find "?" url-tape)
+      ?~  q  url-tape
+      (scag u.q url-tape)
+    ?:  =(path-tape "/apps/noltbook-dev/noltbook.json")
+      =/  manifest=@t
+        '{"noltbook":1,"title":"Noltbook Dev","summary":"Developer harness for testing the Noltbook API surface.","actions":[{"id":"api-harness","kind":"open","label":"Open API Harness","description":"Inspect notes, post messages, test artifacts, pins, calls, forks, and developer attribution.","href":"/apps/noltbook-dev"},{"id":"example-note","kind":"note-template","label":"Example Note","description":"A future template action for creating an app-shaped Noltbook note."}]}'
+      =/  =simple-payload:http
+        :-  [200 ~[['content-type' 'application/json']]]
+        `(as-octs:mimes:html manifest)
+      [(give-simple-payload:app:server eyre-id simple-payload) this]
     =/  html-path=path
       :*  (scot %p our.bowl)
           q.byk.bowl

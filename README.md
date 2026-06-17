@@ -10,6 +10,34 @@ Noltbook internals.
   serves `lib/noltbook-dev/index.html` (the same self-serving trick Noltbook uses —
   no docket/glob).
 - The page talks to the local `%noltbook` agent through the normal Eyre channel.
+- The same agent also serves a **Noltbook app manifest** at
+  `/apps/noltbook-dev/noltbook.json` (see *Noltbook app manifest* below).
+
+## Noltbook app manifest
+
+`app/noltbook-dev.hoon` serves a small read-only JSON manifest at
+**`/apps/noltbook-dev/noltbook.json`** (`content-type: application/json`). This is the
+first real Noltbook app manifest. Noltbook treats any installed desk that serves
+`/apps/<desk>/noltbook.json` as **Noltbook-capable**: its Grimoire → Apps tab fetches
+the manifest per desk, groups manifest-bearing apps under **NOLTBOOK APPS**, and shows
+a **NOLTBOOK APP** capability panel (title, summary, advertised actions) in the app
+detail view. `kind:"open"` actions render an active OPEN button; note-template actions
+are displayed as future capability affordances. The bare `/apps/noltbook-dev` route still
+serves the harness unchanged.
+
+Served manifest:
+
+```json
+{
+  "noltbook": 1,
+  "title": "Noltbook Dev",
+  "summary": "Developer harness for testing the Noltbook API surface.",
+  "actions": [
+    { "id": "api-harness",  "kind": "open",          "label": "Open API Harness", "description": "Inspect notes, post messages, test artifacts, pins, calls, forks, and developer attribution.", "href": "/apps/noltbook-dev" },
+    { "id": "example-note", "kind": "note-template", "label": "Example Note",     "description": "A future template action for creating an app-shaped Noltbook note." }
+  ]
+}
+```
 
 ## Quick start
 
@@ -105,6 +133,9 @@ Ship/host arguments are raw text, parsed server-side — a bad value returns
 | `create-note` | `{ name, parent? }` | `created` (root note) / `accepted` (with `parent` — the internal create may no-op on perms) |
 | `find-or-create-note` | `{ name, parent? }` | `found` (existing our-owned note, exact name) / `created` |
 | `set-note-config` | `{ noteId, name?, visibility?, writable?, headline?, iconUrl? }` | `configured` / `missing-note` / `invalid-name` / `invalid-visibility` / `rejected` |
+| `set-note-app` | `{ noteId, app: null \| { desk, title?, publisher?, tag?, template? } }` | `app-set` / `app-cleared` / `missing-note` / `invalid-desk` / `invalid-publisher` / `invalid-template` / `invalid-app` / `rejected` / `unsupported` |
+| `set-note-pin` | `{ noteId, target, kind:"message"\|"artifact" }` | `pin-set` / `missing-note` / `invalid-target` / `missing-target` / `unsupported` / `rejected` |
+| `clear-note-pin` | `{ noteId }` | `pin-cleared` / `missing-note` / `unsupported` / `rejected` |
 
 `set-note-config` changes only the fields you include (fans out to `rename-note` /
 `set-note-meta` / `set-headline`, one result fact). `visibility` is `public`/`private`/
@@ -115,6 +146,42 @@ DM, only the local `name`/icon take visible effect — other fields run but no-o
 still report `configured`.
 
 To make a configured note: `create-note` then `set-note-config`.
+
+**App-note metadata** (`set-note-app`) is durable note-level metadata associating a note
+with a Noltbook-capable app — it is **not a new note type** (types stay
+notebook/group/gossip/dm/cover). `app:null` clears; an `app` object sets it. `desk` is
+required and must be a valid term; `publisher` (a `@p`) and `template` (a term) are
+validated when present; `tag` is free text capped at 128 chars; `createdBy`/`createdAt`
+are server-stamped (the client cannot set them). Only an explicit `app:null` clears —
+an absent or non-object `app` is rejected with `invalid-app` (never a silent clear).
+Gate: the note must exist, be **notebook/group/gossip** (cover/ars-rumors/DM are
+`unsupported`), not be write-blocked, and the caller must be the note **creator**
+(admins are rejected this phase because the metadata is local-only/unpropagated). Stored
+**locally on the host only this phase** — no live broadcast yet; read it back via the
+`app` field on `/api/notes`, `/api/notes/<id>`, and `/api/notes/<id>/meta` (`null` when
+absent). Noltbook does not execute `template` actions yet.
+
+**Pin** (`set-note-pin` / `clear-note-pin`) is the **one active pin per note** — an
+optional placement that renders in the stable pinned surface above the chat, **not a new
+artifact/note type**. The target is either a **message** (`kind:"message"`, by the
+message's `meta.eid`) or a **`%file`/`%app` artifact** (`kind:"artifact"`, by the
+artifact's `meta.eid`); `%code` is excluded. `invalid-target` = the eid or `kind` didn't
+parse; `missing-target` = a valid eid with no matching message / file-app artifact in that
+note. Gate: note exists, is **notebook/group/gossip** (DM/cover/ars-rumors are
+`unsupported`), not write-blocked, and the caller is the note **creator/host**
+(admins/members rejected). **Setting replaces** the existing pin; `clear-note-pin` clears
+it (the target is not deleted). Pins **broadcast live** (`%note-pin-updated`) and a
+re-subscribing member gets a snapshot; deleting the pinned message/artifact auto-clears
+the pin. Read it back via the `pin` field on `/api/notes/<id>` and `/api/notes/<id>/meta`
+(`null` when absent):
+
+```text
+pin: null
+  | { target, kind, pinnedBy, pinnedAt, messageId, author, preview, timestamp }
+  | { target, kind, pinnedBy, pinnedAt, artifactId, artifactName, artifactType }
+```
+
+Resolved fields are filled at read time and may be `null` if the target is gone.
 
 ### Messages
 
@@ -169,28 +236,6 @@ resolvable host), `rejected` (not allowed for this note/user). Mod ops
 as the **creator** they apply locally and return the durable code. `make-admin`/
 `remove-admin` are creator-only. The target ship is named in the result `message`.
 
-### Pins
-
-Generic pinned entries: a host/admin pins a message or a real `%file`/`%app` artifact
-to the top of a **notebook/group** note. `target` is the entry's `eid` (`%uv` string).
-Everyone who can see the note sees the pins; only host/admin manage them. Capped at 5
-per note. `%code` artifacts, DMs, cover, gossip, and rumors are not pinnable in Phase 1.
-
-| action | data | result |
-|---|---|---|
-| `pin-entry` | `{ noteId, target, kind:"message"\|"artifact" }` | `pinned` / `accepted` / `missing-note` / `unsupported` / `invalid-target` / `missing-target` / `pin-limit` / `rejected` |
-| `unpin-entry` | `{ noteId, target }` | `unpinned` / `accepted` / `missing-note` / `unsupported` / `invalid-target` / `rejected` |
-
-`invalid-target` = the `target` string didn't parse (or `kind` was bad); `missing-target`
-= a valid eid that doesn't resolve to a pinnable entry in that note; `unsupported` = the
-note type can't hold pins; `pin-limit` = already 5 pins (the 6th is rejected, state
-unchanged). Re-pinning an already-pinned target is idempotent (`pinned`, no duplicate).
-Host is authoritative: on a note **you host**, the change applies locally and returns the
-durable `pinned`/`unpinned`. As an **admin on a member ship** the action is forwarded to
-the host (which re-validates) and returns `accepted` — read `/api/notes/<id>` back to
-confirm. The result `eid` field echoes the target. Pins ride a `pins-updated` fact to the
-frontend and remote members; deleting a pinned message/artifact prunes the pin
-automatically.
 
 ### Profile / contacts / pals
 
@@ -276,13 +321,13 @@ internal `/notes` update shapes so they stay stable across UI changes.
 
 | path | returns |
 |---|---|
-| `/api/notes` | `{ notes: [ { id, name, type, creator, visibility, userCount, lastPreview } ] }` |
-| `/api/notes/<id>` | `{ noteId, messages: [ { id, msgId, author, text, timestamp, edited, eid, replyToEid, via } ], artifacts: [ { id, name, type, creator, noteId, eid, replyToEid, created, updated, versionCount, latestVersion, latestEditor, latestTimestamp, mime, kind, size, url, downloadUrl, via } ], pins: [ { target, kind, pinnedBy, pinnedAt, resolved, summary, author } ] }` |
+| `/api/notes` | `{ notes: [ { id, name, type, creator, visibility, userCount, lastPreview, app } ] }` |
+| `/api/notes/<id>` | `{ noteId, messages: [ { id, msgId, author, text, timestamp, edited, eid, replyToEid, via } ], artifacts: [ { id, name, type, creator, noteId, eid, replyToEid, created, updated, versionCount, latestVersion, latestEditor, latestTimestamp, mime, kind, size, url, downloadUrl, via } ], app, pin }` |
 | `/api/artifacts/<id>` | `{ artifact: { …artifact fields…, via, versions: [ { version, content, editor, timestamp } ] } }` |
 | `/api/profile/<ship>` | `{ ship, known, displayName, avatar, walletAddress, azimuthAddress, palStatus, isContact, isBlocked }` |
 | `/api/contacts` | `{ contacts: [ …profile fields… ] }` |
 | `/api/notes/<id>/members` | `{ noteId, members: [ …profile fields…, role, muted, removed ] }` |
-| `/api/notes/<id>/meta` | `{ id, name, type, creator, visibility, writable, parent, children, userCount, removedCount, iconUrl, headline, lastAuthor, lastPreview, hostStatus, activity, read, forkOrigin, forkVersion, forkOf, memberRev, capabilities: {…} }` |
+| `/api/notes/<id>/meta` | `{ id, name, type, creator, visibility, writable, parent, children, userCount, removedCount, iconUrl, headline, lastAuthor, lastPreview, hostStatus, activity, read, forkOrigin, forkVersion, forkOf, memberRev, app, pin, capabilities: {…} }` |
 | `/api/notes/<id>/capabilities` | `{ noteId, …capability flags… }` |
 | `/api/fork-invites` | `{ forkInvites: [ { rootId, sourceName, sourceVersion, forker, fetching } ] }` |
 | `/api/calls` | `{ calls: [ <call> ] }` |
@@ -313,7 +358,7 @@ The harness is laid out section-by-section; each maps to one part of the API:
 - **Notes** — List Notes; Create / Find `api-test`; Read Recent / Meta / Capabilities.
 - **Messages** — Post Text Message; per-row Edit / Delete; Post App Reference.
 - **Artifacts** — Create Artifact (code/app); Detail; Edit / Delete on the selected artifact.
-- **Pins** — in Read Recent, Pin/Unpin a message or `%file`/`%app` artifact row; the pins block lists current pins (oldest first) with Unpin. Verify: pin message/file/app, multiple pins order oldest-first, the 6th pin returns `pin-limit`, re-pin is idempotent, a plain member is `rejected`, an admin succeeds, deleting a pinned target removes the pin.
+- **Pin** — in Read Recent, Pin a message or `%file`/`%app` artifact row (one active pin per note); the active-pin block shows kind/target/pinnedBy with Clear Pin. Verify: pin a message, pin a `%file`/`%app` artifact (`%code` has no Pin button), setting a new target **replaces** the pin, `clear-note-pin` clears it, a non-creator is `rejected`, and deleting the pinned target auto-clears the pin. Read Meta shows the `pin` line.
 - **Profile / Contacts / Pals** — Read Profile / Contacts / Members; Update Profile (null checkbox per field); Add/Remove Contact; Add/Remove/Block/Unblock Pal.
 - **Membership / Admin** — request join, add/remove member, approve/deny/deny+block, mute/unmute, make/remove admin.
 - **Note Config** — name / visibility / writable / headline → Set Selected Note Config.
