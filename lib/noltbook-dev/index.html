@@ -78,6 +78,19 @@
   </div>
 
   <div class="card">
+    <h2>2.5 &middot; ACTOR IDENTITY <span class="muted" style="font-size:.7rem">(optional, app-scoped)</span></h2>
+    <p class="hint">Sent as top-level <code>actor {id,name,kind}</code> on post-message / post-app-ref (and the DM/gossip tests below).
+    Honored only when <code>app</code> is valid; backend stamps <code>host=our</code> + <code>desk=app.desk</code>.
+    Regular notes &amp; DMs only — cover/gossip/ars-rumors omit actor in v1. Display/attribution only.</p>
+    <div class="row">
+      <label><input type="checkbox" id="actorSend" checked> Send actor</label>
+      <input id="actorId" value="rick" size="10" placeholder="id">
+      <input id="actorName" value="Rick" size="10" placeholder="name">
+      <select id="actorKind"><option value="user">user</option><option value="bot">bot</option><option value="app">app</option></select>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>3 &middot; POST TEXT MESSAGE</h2>
     <p class="hint">poke <code>send-message {noteId,text}</code> into the selected note, then re-read.</p>
     <div class="row">
@@ -491,13 +504,26 @@ async function createOrFind(){
   }catch(e){setStatus(e.message,'err')}
 }
 
+// actor identity (Phase 3): top-level {id,name,kind} sent only when "Send actor"
+// is on and id+name are non-empty. kind is constrained by the select. Backend
+// honors it only with valid app, and only for regular notes + DMs.
+function actorObj(){
+  if(!$('actorSend').checked)return null;
+  const id=($('actorId').value||'').trim();
+  const name=($('actorName').value||'').trim();
+  if(!id||!name)return null;
+  return {id,name,kind:$('actorKind').value};
+}
+// add the actor field to a poke body when enabled; never mutates other actions.
+function addActor(body){const a=actorObj();if(a)body.actor=a;return body}
+
 async function postMessage(){
   if(!selected){setStatus('select/create a note first','err');return}
   const text=$('msgText').value;
   if(!text){setStatus('enter message text','err');return}
   setStatus('poke post-message …');
   try{
-    const ok=await api.poke('noltbook','noltbook-api',{action:'post-message',requestId:nextReq(),app:APP,data:{noteId:selected,text}});
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'post-message',requestId:nextReq(),app:APP,data:{noteId:selected,text}}));
     if(!ok){setStatus('post-message poke failed','err');return}
     await sleep(400);
     setStatus('sent.','ok');
@@ -564,8 +590,8 @@ async function postAppRef(){
   const f=refFields();
   setStatus('poke post-app-ref …');
   try{
-    const ok=await api.poke('noltbook','noltbook-api',{action:'post-app-ref',requestId:nextReq(),app:APP,
-      data:{noteId:selected,publisher:f.publisher,desk:f.desk,name:f.name||f.desk.replace(/^%/,'')}});
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'post-app-ref',requestId:nextReq(),app:APP,
+      data:{noteId:selected,publisher:f.publisher,desk:f.desk,name:f.name||f.desk.replace(/^%/,'')}}));
     if(!ok){setStatus('post-app-ref poke failed','err');return}
     await sleep(400);
     setStatus('sent app ref (server built it)','ok');
@@ -662,6 +688,8 @@ async function deleteMessage(i){
   }catch(e){setStatus(e.message,'err')}
 }
 function viaText(v){return v?('via '+v.desk+(v.title?(' ('+v.title+')'):'')+' on '+v.ship):''}
+// actor identity readout: "actor Rick (user) via %noltbook-dev on ~zod".
+function actorText(a){return a?('actor '+a.name+' ('+a.kind+') via %'+a.desk+' on '+a.host):''}
 function kv(k,val){return(val===undefined||val===null||val==='')?'':'<div><span class="k">'+esc(k)+':</span> '+esc(val)+'</div>'}
 function msgIsSel(m){return selectedEntry&&selectedEntry.type==='message'&&(selectedEntry.msgId===m.msgId||(!!selectedEntry.eid&&selectedEntry.eid===m.eid))}
 function artIsSel(a){return selectedEntry&&selectedEntry.type==='artifact'&&selectedEntry.id===a.id}
@@ -685,7 +713,8 @@ function paintRecent(){
       +'<div class="who">'+esc(m.author)+' · '+new Date(m.timestamp).toLocaleTimeString()+(m.edited?' · edited':'')+(isPinnedEid(m.eid)?' · 📌':'')+'</div>'
       +'<div class="body">'+esc(m.text)+'</div>'
       +'<div class="muted" style="font-size:.7rem">msgId '+esc(m.msgId||'')+(m.eid?' · eid '+esc(m.eid):'')
-        +(m.via?(' · <span style="color:var(--amber)">'+esc(viaText(m.via))+'</span>'):'')+'</div>'
+        +(m.via?(' · <span style="color:var(--amber)">'+esc(viaText(m.via))+'</span>'):'')
+        +(m.actor?(' · <span style="color:#4cc9f0">'+esc(actorText(m.actor))+'</span>'):'')+'</div>'
       +'<div class="row" style="margin:.2rem 0 0">'
       +'<button data-act="edit" data-i="'+i+'">Edit</button>'
       +'<button data-act="delete" data-i="'+i+'">Delete</button>'
@@ -716,6 +745,7 @@ function renderEntry(){
       +kv('author',m.author)+kv('time',new Date(m.timestamp).toLocaleString())
       +kv('msgId',m.msgId)+kv('eid',m.eid)+kv('edited',m.edited?'true':'false')
       +(m.via?kv('via',viaText(m.via)):'')
+      +(m.actor?kv('actor',actorText(m.actor)):'')
       +'<div class="txt">'+esc(m.text)+'</div></div>';
   }else{
     const a=lastArts.find(artIsSel);
@@ -968,8 +998,8 @@ async function postDmTest(){
   if(!selected){setStatus('select/create a DM first','err');return}
   setStatus('poke post-message (dm test) …');
   try{
-    const ok=await api.poke('noltbook','noltbook-api',{action:'post-message',requestId:nextReq(),app:APP,
-      data:{noteId:selected,text:'dm test from %noltbook-dev'}});
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'post-message',requestId:nextReq(),app:APP,
+      data:{noteId:selected,text:'dm test from %noltbook-dev'}}));
     if(!ok){setStatus('post-message poke failed','err');return}
     await sleep(400); setStatus('dm test sent.','ok'); readRecent();
   }catch(e){setStatus(e.message,'err')}
@@ -991,8 +1021,8 @@ async function postGossipTest(){
   if(!selected){setStatus('select/create a gossip note first','err');return}
   setStatus('poke post-message (gossip test) …');
   try{
-    const ok=await api.poke('noltbook','noltbook-api',{action:'post-message',requestId:nextReq(),app:APP,
-      data:{noteId:selected,text:'gossip test from %noltbook-dev'}});
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'post-message',requestId:nextReq(),app:APP,
+      data:{noteId:selected,text:'gossip test from %noltbook-dev'}}));
     if(!ok){setStatus('post-message poke failed','err');return}
     await sleep(400); setStatus('gossip test sent.','ok'); readRecent();
   }catch(e){setStatus(e.message,'err')}

@@ -77,6 +77,7 @@ await api.subscribe('noltbook', '/api/results');              // then read facts
 ```
 
 `app` is an optional top-level attribution object (see *Notes on semantics → via*).
+`actor` is an optional top-level app-scoped identity object (see *Notes on semantics → actor*).
 
 ## Result facts
 
@@ -218,6 +219,11 @@ except a group note's host may delete any message. The result carries the resolv
 `msgId`+`eid`. `post-message`/`post-app-ref` to a note you host are `posted`; to a
 remote-hosted note they're `forwarded` (see *Durable vs. handed-off*).
 
+`post-message` and `post-app-ref` also accept an optional top-level **`actor`**
+`{ id, name, kind }` (app-scoped identity inside `via` — see *Notes on semantics →
+actor*). It is honored only when a valid top-level `app` is present and only on
+regular notes and DMs; cover/gossip/ars-rumors omit it. Display/attribution only.
+
 ### Artifacts
 
 Code and app artifacts (content lives in the artifact's versions). File-byte artifacts
@@ -342,7 +348,7 @@ internal `/notes` update shapes so they stay stable across UI changes.
 | path | returns |
 |---|---|
 | `/api/notes` | `{ notes: [ { id, name, type, creator, visibility, userCount, lastPreview, app, active } ] }` |
-| `/api/notes/<id>` | `{ noteId, messages: [ { id, msgId, author, text, timestamp, edited, eid, replyToEid, via } ], artifacts: [ { id, name, type, creator, noteId, eid, replyToEid, created, updated, versionCount, latestVersion, latestEditor, latestTimestamp, mime, kind, size, url, downloadUrl, via } ], app, pin, active }` |
+| `/api/notes/<id>` | `{ noteId, messages: [ { id, msgId, author, text, timestamp, edited, eid, replyToEid, via, actor } ], artifacts: [ { id, name, type, creator, noteId, eid, replyToEid, created, updated, versionCount, latestVersion, latestEditor, latestTimestamp, mime, kind, size, url, downloadUrl, via } ], app, pin, active }` |
 | `/api/artifacts/<id>` | `{ artifact: { …artifact fields…, via, versions: [ { version, content, editor, timestamp } ] } }` |
 | `/api/profile/<ship>` | `{ ship, known, displayName, avatar, walletAddress, azimuthAddress, palStatus, isContact, isBlocked }` |
 | `/api/contacts` | `{ contacts: [ …profile fields… ] }` |
@@ -377,6 +383,7 @@ The harness is laid out section-by-section; each maps to one part of the API:
 
 - **Notes** — List Notes; Create / Find `api-test`; Read Recent / Meta / Capabilities.
 - **Messages** — Post Text Message; per-row Edit / Delete; Post App Reference.
+- **Actor** — *Actor Identity* card (id/name/kind + "Send actor", on by default; sends top-level `actor` alongside `app:APP`). Verify: Post Text Message with actor on → Read Recent row shows `actor Rick (user) via %noltbook-dev on ~zod` and the Noltbook chat renders an actor header; Post App Reference with actor on → same actor header. Turn "Send actor" off → posts render as the normal ship/`via` row (no actor). The `kind` select constrains to user/bot/app (a console poke with a bad kind omits actor but still posts). Select a **gossip** note and post with actor on → read shows `actor:null` (backend excludes gossip in v1); a **DM** note with actor on → actor appears. Actor requires a valid `app`; with no `app` it is omitted.
 - **Artifacts** — Create Artifact (code/app); Detail; Edit / Delete on the selected artifact.
 - **Pin** — in Read Recent, Pin a message or `%file`/`%app` artifact row (one pin per note); the pinned-item block shows kind/target/pinnedBy with Clear Pin. Verify: pin a message, pin a `%file`/`%app` artifact (`%code` has no Pin button), setting a new target **replaces** the pin, `clear-note-pin` clears it, a non-creator is `rejected`, and deleting the pinned target auto-clears the pin. Read Meta shows the `pin` line.
 - **Active** — *Active* card: Set Active (label/count/ttl; sends top-level `app:APP`) → `active-set`; Read Recent/Meta show the `active` line and the sidebar shows an amber badge. Verify: count+label render (e.g. "5 listening"), after `ttl` seconds the read shows `active:null` (expiry filter), Clear Active → `active-cleared`. A `set-note-active` without `app` returns `missing-app` (the harness always sends `APP`, so test that path via the debug console/docs); a non-creator returns `rejected`.
@@ -410,6 +417,27 @@ acceptance/failure, not the full post-state.
   `{ desk, title, publisher, ship }`. A normal Noltbook UI message reads `via:null`;
   anonymous `%ars-rumors` posts are never attributed. Reads expose a nullable `via` on
   messages and artifacts.
+- **`actor` is app-scoped identity inside `via`.** Pass an optional top-level
+  `actor:{ id, name, kind }` on `post-message`/`post-app-ref` and the agent records an
+  app-scoped speaker — e.g. *Rick via %skiff on ~zod*. `kind` is one of
+  `user`/`bot`/`app`. The stored `host` and `desk` are stamped server-side (`host=our`,
+  `desk=app.desk`) — never client-supplied; the client only supplies `id`/`name`/`kind`.
+  Rules:
+  - **Requires a valid top-level `app`.** No `app` ⇒ actor omitted (message still posts).
+  - **Invalid actor is omitted, never rejected** — empty `id`/`name`, an out-of-range
+    `kind`, or over-cap (`id` > 128 / `name` > 64 bytes) drops the actor; the message
+    still posts.
+  - **Display/attribution only in v1.** It does **not** change the Urbit author
+    (`message.author` stays the real ship), permissions, membership, edit/delete
+    ownership, or note ownership. The real ship remains the authority; `actor` is the
+    identity inside `via`.
+  - **Support matrix:** regular notes — yes; DMs — yes; cover/gossip/ars-rumors — no
+    (actor is `null` everywhere there, on sender and peers); artifacts/active/note-app/
+    pins — no actor in v1.
+  - On remote delivery the receiver keeps `actor` only when it arrives tied to valid
+    same-source `via` (`actor.host == via.ship == src` and `actor.desk == via.desk`),
+    else it is dropped. Reads expose a nullable `actor` `{ host, desk, id, name, kind }`
+    on messages.
 - **The call API controls Noltbook call state, not media.** No audio/video/WebRTC.
 - **`walletAddress` is profile metadata only** — stored and read back, with no wallet
   validation or transaction logic.
