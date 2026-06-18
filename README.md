@@ -48,13 +48,16 @@ Served manifest:
 ```
 
 Open `http://<your-ship-url>/apps/noltbook-dev`. On load the page resolves your ship
-from `/~/host` and subscribes to `/api/results` (status line shows
-"subscribed · /api/results (live)").
+from `/~/host`. The result stream is **manual**: click **Connect Result Stream** when
+you want live `/api/results` facts. This keeps the harness usable for read-after-write
+testing even after a stale browser channel or ship restart.
 
 First pass:
 1. **Create / Find** → `find-or-create-note` makes the `api-test` note and selects it.
 2. **Post Text Message** → `post-message` into it.
 3. **Read Recent** → `/api/notes/<id>` shows the message and any artifacts.
+4. Optional: **Connect Result Stream**, then run one small write again and confirm the
+   result line shows `OK [...]` or `FAIL [...]`.
 
 ## Eyre basics
 
@@ -72,7 +75,7 @@ await api.poke('noltbook', 'noltbook-api', {
   data: { noteId: '<id>', text: 'hi' }
 });
 
-// results
+// results (optional; the harness exposes this as "Connect Result Stream")
 await api.subscribe('noltbook', '/api/results');              // then read facts off the channel
 ```
 
@@ -83,8 +86,10 @@ await api.subscribe('noltbook', '/api/results');              // then read facts
 
 Include a numeric **`requestId`** on a poke and the agent emits one result fact on
 `/api/results`. Omit it and the poke is fire-and-forget (no fact). Facts are
-**live-only** — there's no backlog, so subscribe before you poke. The harness shows
-each result plus a small log.
+**live-only** — there's no backlog, so connect the result stream before the poke whose
+fact you want to see. The harness shows each result plus a small log. If the stream
+drops, the harness closes it instead of auto-reconnecting forever; reload or click
+**Connect Result Stream** again when the ship is stable.
 
 Two fact shapes (both inside a `noltbook-update` diff):
 
@@ -223,6 +228,36 @@ remote-hosted note they're `forwarded` (see *Durable vs. handed-off*).
 `{ id, name, kind }` (app-scoped identity inside `via` — see *Notes on semantics →
 actor*). It is honored only when a valid top-level `app` is present and only on
 regular notes and DMs; cover/gossip/ars-rumors omit it. Display/attribution only.
+Since **Actor Control (Phase A)**, a well-formed actor must also pass the host's app
+grant + actor registry — a governance-denied actor **rejects** the post (codes
+`app-not-granted` / `app-disabled` / `actor-suspended` / `actor-revoked`) rather than
+silently posting as the host.
+
+### Actor Control (Phase A)
+
+Host-only governance over which **local** app desks may attribute actors and the
+lifecycle of each actor. These mutate grant/registry state only; they never post
+content, and the actor-bearing post path cannot reach them.
+
+| action | data | result |
+|---|---|---|
+| `set-app-grant` | `{ desk, enabled, caps? }` (`caps` string array, default `["attribute"]`) | `app-granted` / `app-disabled` / `actor-invalid` |
+| `set-actor-status` | `{ desk, id, status }` (`status` = `active`/`suspended`/`revoked`) | `actor-active` / `actor-suspended` / `actor-revoked` / `actor-invalid` |
+| `update-actor` | `{ desk, id, name, kind }` (requires app grant with `%manage-actors`) | `actor-updated` / `app-not-granted` / `actor-invalid` |
+
+Model: the **host planet** grants/disables an app (`set-app-grant`) and suspends/revokes
+individual actors (`set-actor-status`). An app may register/rename its own actors via
+`update-actor` only if its grant includes `%manage-actors`. **An app cannot grant itself
+powers** — the grant path is separate from posting, and the post path never writes grants.
+First attributed post from an unknown `[desk id]` under a granted app **auto-registers**
+the actor as `active` (TOFU). Revoking stops future posts; **history stays attributed**.
+
+> **Security caveat — desk grants are cooperative, not authenticated.** `%noltbook-api` is
+> same-ship only, and **Gall does not expose the calling local agent** — Noltbook sees
+> `src.bowl` (the ship), not `%skiff`. So `app.desk` is an app-supplied name, not an
+> authenticated caller identity. Phase A gives the host **revocation + audit**, not hard
+> isolation from a malicious local agent (which already holds `our.bowl` authority). The
+> real protection remains: only install trusted local agents.
 
 ### Artifacts
 
@@ -350,6 +385,9 @@ internal `/notes` update shapes so they stay stable across UI changes.
 | `/api/notes` | `{ notes: [ { id, name, type, creator, visibility, userCount, lastPreview, app, active } ] }` |
 | `/api/notes/<id>` | `{ noteId, messages: [ { id, msgId, author, text, timestamp, edited, eid, replyToEid, via, actor } ], artifacts: [ { id, name, type, creator, noteId, eid, replyToEid, created, updated, versionCount, latestVersion, latestEditor, latestTimestamp, mime, kind, size, url, downloadUrl, via } ], app, pin, active }` |
 | `/api/artifacts/<id>` | `{ artifact: { …artifact fields…, via, versions: [ { version, content, editor, timestamp } ] } }` |
+| `/api/actor-grants` | `{ grants: [ { desk, enabled, caps, grantedBy, grantedAt, updatedAt, revokedAt } ] }` |
+| `/api/actors` | `{ actors: [ { desk, id, name, kind, status, createdAt, updatedAt, revokedAt, lastSeen } ] }` |
+| `/api/actors/<desk>` | same as `/api/actors`, filtered to one desk |
 | `/api/profile/<ship>` | `{ ship, known, displayName, avatar, walletAddress, azimuthAddress, palStatus, isContact, isBlocked }` |
 | `/api/contacts` | `{ contacts: [ …profile fields… ] }` |
 | `/api/notes/<id>/members` | `{ noteId, members: [ …profile fields…, role, muted, removed ] }` |
@@ -384,9 +422,19 @@ The harness is laid out section-by-section; each maps to one part of the API:
 - **Notes** — List Notes; Create / Find `api-test`; Read Recent / Meta / Capabilities.
 - **Messages** — Post Text Message; per-row Edit / Delete; Post App Reference.
 - **Actor** — *Actor Identity* card (id/name/kind + "Send actor", on by default; sends top-level `actor` alongside `app:APP`). Verify: Post Text Message with actor on → Read Recent row shows `actor Rick (user) via %noltbook-dev on ~zod` and the Noltbook chat renders an actor header; Post App Reference with actor on → same actor header. Turn "Send actor" off → posts render as the normal ship/`via` row (no actor). The `kind` select constrains to user/bot/app (a console poke with a bad kind omits actor but still posts). Select a **gossip** note and post with actor on → read shows `actor:null` (backend excludes gossip in v1); a **DM** note with actor on → actor appears. Actor requires a valid `app`; with no `app` it is omitted.
+- **Actor Control** — *Actor Control* card (host governance, Phase A). For live result
+  codes, click **Connect Result Stream** first; otherwise confirm by re-reading state.
+  Flow: with no grant, Post Text Message (actor on) → no new message and, with the stream
+  connected, `FAIL [app-not-granted]`. Click **Grant** (desk `noltbook-dev`) →
+  `app-granted`; post again → succeeds and **List Grants/Actors** shows the actor
+  auto-registered `[active]` (TOFU). **Suspend** → next actor post `FAIL
+  [actor-suspended]`; **Revoke** → `FAIL [actor-revoked]`; **Activate** → posting works
+  again. **Disable** the app → `FAIL [app-disabled]`. Past attributed messages stay
+  attributed after revoke. Remember: desk grants are **cooperative**, not authenticated
+  (Gall hides the calling agent) — governance/audit, not isolation.
 - **Artifacts** — Create Artifact (code/app); Detail; Edit / Delete on the selected artifact.
 - **Pin** — in Read Recent, Pin a message or `%file`/`%app` artifact row (one pin per note); the pinned-item block shows kind/target/pinnedBy with Clear Pin. Verify: pin a message, pin a `%file`/`%app` artifact (`%code` has no Pin button), setting a new target **replaces** the pin, `clear-note-pin` clears it, a non-creator is `rejected`, and deleting the pinned target auto-clears the pin. Read Meta shows the `pin` line.
-- **Active** — *Active* card: Set Active (label/count/ttl; sends top-level `app:APP`) → `active-set`; Read Recent/Meta show the `active` line and the sidebar shows an amber badge. Verify: count+label render (e.g. "5 listening"), after `ttl` seconds the read shows `active:null` (expiry filter), Clear Active → `active-cleared`. A `set-note-active` without `app` returns `missing-app` (the harness always sends `APP`, so test that path via the debug console/docs); a non-creator returns `rejected`.
+- **Active** — *Active* card: Set Active (label/count/ttl; sends top-level `app:APP`) → `active-set`; Read Recent/Meta show the `active` line and the sidebar shows the same green in-progress style as calls. Verify: the compact sidebar badge shows the count only when present (the label is in the title), after `ttl` seconds the read shows `active:null` (expiry filter), Clear Active → `active-cleared`. A `set-note-active` without `app` returns `missing-app` (the harness always sends `APP`, so test that path via the debug console/docs); a non-creator returns `rejected`.
 - **Profile / Contacts / Pals** — Read Profile / Contacts / Members; Update Profile (null checkbox per field); Add/Remove Contact; Add/Remove/Block/Unblock Pal.
 - **Membership / Admin** — request join, add/remove member, approve/deny/deny+block, mute/unmute, make/remove admin.
 - **Note Config** — name / visibility / writable / headline → Set Selected Note Config.
@@ -407,8 +455,9 @@ acceptance/failure, not the full post-state.
 - **`accepted`/`forwarded` are not always durable confirmation.** When an action is
   forwarded to a host or handed off async, read state back to confirm (see *Durable vs.
   handed-off result codes*).
-- **Result facts are live-only.** No backlog — subscribe to `/api/results` before you
-  poke.
+- **Result facts are live-only.** No backlog — click **Connect Result Stream** before
+  the poke whose result you want to see. The stream is intentionally manual in the
+  harness so stale browser channels do not reconnect forever after a ship restart.
 - **`via` is attribution, not authorship.** Pass `app:{ desk, title?, publisher? }` on a
   poke and the agent records "posted via app X". The author stays the user/ship; the
   stored `ship` is `our`, stamped server-side — never client-supplied. A malformed `app`

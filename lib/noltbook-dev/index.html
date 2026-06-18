@@ -60,6 +60,7 @@
     Selected note: <span id="sel" class="sel">none</span></p>
     <div class="status" id="status"></div>
     <div class="status" id="sub"></div>
+    <button onclick="initResults()">Connect Result Stream</button>
     <div class="status" id="result"></div>
     <div id="resultLog" style="font-size:.72rem;max-height:120px;overflow:auto;margin-top:.3rem"></div>
   </div>
@@ -88,6 +89,27 @@
       <input id="actorName" value="Rick" size="10" placeholder="name">
       <select id="actorKind"><option value="user">user</option><option value="bot">bot</option><option value="app">app</option></select>
     </div>
+    <p class="hint" style="margin-top:.3rem">Phase A: an actor is honored only if its app desk is <strong>granted</strong> and the actor is <strong>active</strong> (see Actor Control). A denied actor <strong>rejects</strong> the post (watch the result line) — it is never silently posted as the host. First post after granting auto-registers the actor (TOFU).</p>
+  </div>
+
+  <div class="card">
+    <h2>2.6 &middot; ACTOR CONTROL <span class="muted" style="font-size:.7rem">(host governance · Phase A)</span></h2>
+    <p class="hint">Host grants which local app desk may attribute actors, and each actor's lifecycle.
+    <strong>Cooperative, not authenticated:</strong> Gall does not expose the calling agent, so <code>desk</code> is app-supplied — this is revocation/audit, not isolation from a malicious local agent.</p>
+    <div class="row">
+      <input id="grantDesk" value="noltbook-dev" size="14" placeholder="desk">
+      <label><input type="checkbox" id="grantManage"> %manage-actors</label>
+      <button class="primary" onclick="setAppGrant(true)">Grant</button>
+      <button onclick="setAppGrant(false)">Disable</button>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <span class="muted" style="font-size:.74rem">actor id from Actor Identity above:</span>
+      <button onclick="setActorStatus('active')">Activate</button>
+      <button onclick="setActorStatus('suspended')">Suspend</button>
+      <button onclick="setActorStatus('revoked')">Revoke</button>
+      <button onclick="loadActorControl()">List Grants/Actors</button>
+    </div>
+    <div id="actorControl" class="muted" style="font-size:.74rem;margin-top:.3rem"></div>
   </div>
 
   <div class="card">
@@ -437,7 +459,12 @@ function openResultStream(){
     if(d.json['api-result'])showResult(d.json['api-result']);
     else if(d.json['api-search-result'])showSearch(d.json['api-search-result']);
   };
-  resultStream.onerror=()=>{$('sub').className='status err';$('sub').textContent='result stream dropped — auto-reconnecting…'};
+  resultStream.onerror=()=>{
+    $('sub').className='status err';
+    $('sub').textContent='result stream dropped — closed; reload to reconnect';
+    try{resultStream.close()}catch(_){}
+    resultStream=null;
+  };
 }
 async function initResults(){
   try{
@@ -517,6 +544,47 @@ function actorObj(){
 // add the actor field to a poke body when enabled; never mutates other actions.
 function addActor(body){const a=actorObj();if(a)body.actor=a;return body}
 
+// ---- Actor Control (Phase A): host governance pokes + registry reads. ----
+async function setAppGrant(enabled){
+  const desk=($('grantDesk').value||'').trim();
+  if(!desk){setStatus('enter a desk','err');return}
+  const caps=['attribute']; if($('grantManage').checked)caps.push('manage-actors');
+  setStatus('poke set-app-grant …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'set-app-grant',requestId:nextReq(),data:{desk,enabled,caps}});
+    if(!ok){setStatus('set-app-grant poke failed','err');return}
+    await sleep(300); setStatus(enabled?'app granted.':'app disabled.','ok'); loadActorControl();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function setActorStatus(status){
+  const desk=($('grantDesk').value||'').trim();
+  const id=($('actorId').value||'').trim();
+  if(!desk||!id){setStatus('need a desk + actor id','err');return}
+  setStatus('poke set-actor-status …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'set-actor-status',requestId:nextReq(),data:{desk,id,status}});
+    if(!ok){setStatus('set-actor-status poke failed','err');return}
+    await sleep(300); setStatus('actor '+status+'.','ok'); loadActorControl();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function loadActorControl(){
+  setStatus('scry /api/actor-grants + /api/actors …');
+  try{
+    const g=await api.scry('noltbook','/api/actor-grants');
+    const a=await api.scry('noltbook','/api/actors');
+    const grants=(g&&g.grants)||[];
+    const actors=(a&&a.actors)||[];
+    let h='<div><strong>grants</strong>: '+(grants.length
+      ? grants.map(x=>esc(x.desk)+(x.enabled?'':' (disabled)')+' ['+(x.caps||[]).map(esc).join(',')+']').join(' · ')
+      : 'none')+'</div>';
+    h+='<div style="margin-top:.2rem"><strong>actors</strong>: '+(actors.length
+      ? actors.map(x=>esc('%'+x.desk+'/'+x.id)+' '+esc(x.name)+' ('+esc(x.kind)+') ['+esc(x.status)+']').join(' · ')
+      : 'none')+'</div>';
+    $('actorControl').innerHTML=h;
+    setStatus(grants.length+' grants, '+actors.length+' actors','ok');
+  }catch(e){setStatus(e.message,'err');$('actorControl').textContent=String(e)}
+}
+
 async function postMessage(){
   if(!selected){setStatus('select/create a note first','err');return}
   const text=$('msgText').value;
@@ -583,7 +651,7 @@ $('forkInvites').addEventListener('click',ev=>{
   if(btn.dataset.act==='fork-accept')forkInviteAction('accept-fork-invite',btn.dataset.root);
   else if(btn.dataset.act==='fork-decline')forkInviteAction('decline-fork-invite',btn.dataset.root);
 });
-bootShip().then(()=>{if(api.ship)initResults()});  // resolve ship, enable buttons, then subscribe to /api/results
+bootShip().then(()=>{if(api.ship){$('sub').textContent='result stream not connected';}});
 
 async function postAppRef(){
   if(!selected){setStatus('select/create a note first','err');return}
