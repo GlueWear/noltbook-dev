@@ -217,6 +217,8 @@ active: null | { desk, title, publisher, label, count, setBy, updatedAt, expires
 | `edit-message` | `{ noteId, text, eid?, msgId? }` | `edited` / `accepted` / `missing-note` / `missing-target` / `rejected` |
 | `delete-message` | `{ noteId, eid?, msgId? }` | `deleted` / `accepted` / `missing-note` / `missing-target` / `rejected` |
 | `post-app-ref` | `{ noteId, publisher, desk, name }` | `posted` / `forwarded` / `invalid-publisher` / `invalid-desk` — posts an `~app[…]` reference as a message |
+| `edit-actor-message` | top-level `app` + `actor` + `{ noteId, eid?, msgId?, text }` | `actor-edited` (local host) / `accepted` (forwarded to remote host) / `actor-invalid` / `actor-missing` / `actor-mismatch` / `actor-not-participant` / `unsupported` / `app-not-granted` / `app-disabled` / `actor-suspended` / `actor-revoked` / `missing-note` / `missing-target` / `rejected` |
+| `delete-actor-message` | top-level `app` + `actor` + `{ noteId, eid?, msgId? }` | `actor-deleted` (local host) / `accepted` (forwarded to remote host) / (same failure codes as `edit-actor-message`) |
 
 `edit-message`/`delete-message` resolve the target **eid-first, `msgId` fallback** (at
 least one required, else `missing-target`). Edit is author-only; delete is author-only
@@ -243,7 +245,7 @@ content, and the actor-bearing post path cannot reach them.
 |---|---|---|
 | `set-app-grant` | `{ desk, enabled, caps? }` (`caps` string array, default `["attribute"]`) | `app-granted` / `app-disabled` / `actor-invalid` |
 | `set-actor-status` | `{ desk, id, status }` (`status` = `active`/`suspended`/`revoked`) | `actor-active` / `actor-suspended` / `actor-revoked` / `actor-invalid` |
-| `update-actor` | `{ desk, id, name, kind }` (requires app grant with `%manage-actors`) | `actor-updated` / `app-not-granted` / `actor-invalid` |
+| `update-actor` | `{ desk, id, name, kind, caps? }` (requires app grant with `%manage-actors`) | `actor-updated` / `app-not-granted` / `actor-invalid` |
 
 Model: the **host planet** grants/disables an app (`set-app-grant`) and suspends/revokes
 individual actors (`set-actor-status`). An app may register/rename its own actors via
@@ -252,12 +254,788 @@ powers** — the grant path is separate from posting, and the post path never wr
 First attributed post from an unknown `[desk id]` under a granted app **auto-registers**
 the actor as `active` (TOFU). Revoking stops future posts; **history stays attributed**.
 
+**Capabilities (Phase C).** `caps` on a grant is the set of `app-cap` values the host
+allows the app. The full enum: `attribute`, `manage-actors`, `post-message`,
+`edit-own-message`, `delete-own-message`, `create-note`, `configure-note`,
+`create-artifact`, `edit-own-artifact`, `delete-own-artifact`, `set-active`, `pin-note`
+(not all wired yet — the model carries them all). The **app grant is the ceiling.**
+Each actor may be narrowed *within* it via `update-actor`'s `caps`, which is three-state:
+**absent** = keep existing actor caps; **`null`** = clear (inherit the app grant);
+**array** = an explicit per-actor subset. An actor can **never exceed** the app grant; an
+unknown string is dropped. `/api/actors` shows `caps: null` (inherit) or an array.
+
+**Message gates wired this phase:** actor `post-message`/`post-app-ref` require
+`attribute` + `post-message`; `edit-actor-message` requires `attribute` +
+`edit-own-message`; `delete-actor-message` requires `attribute` + `delete-own-message`.
+A missing cap (at the app *or* actor level) returns **`cap-missing`** with a message like
+`app lacks %edit-own-message` / `actor lacks %edit-own-message`. `suspended`/`revoked`
+still block everything. Non-actor `edit-message`/`delete-message` are unchanged (ship-author scoped).
+
 > **Security caveat — desk grants are cooperative, not authenticated.** `%noltbook-api` is
 > same-ship only, and **Gall does not expose the calling local agent** — Noltbook sees
 > `src.bowl` (the ship), not `%skiff`. So `app.desk` is an app-supplied name, not an
 > authenticated caller identity. Phase A gives the host **revocation + audit**, not hard
 > isolation from a malicious local agent (which already holds `our.bowl` authority). The
 > real protection remains: only install trusted local agents.
+
+### Actor Tools — edit/delete own messages (Phase B)
+
+`edit-actor-message` / `delete-actor-message` let an app actor edit or delete **only
+the messages it originally attributed**. They require top-level `app` + `actor` (unlike
+`edit-message`/`delete-message`, which are ship-author scoped and unchanged). The gate:
+resolve the target (eid-first, `msgId` fallback) → require `meta.eid` → look up the
+stored `actor-by-eid` row → it must match `[host=our, desk=app.desk, id=actor.id]`
+(`actor-mismatch` otherwise) → then run the normal grant/registry governance
+(`gate-actor`) → and (Phase G2) require current note **ownership/participation** via
+`actor-note-access` (`actor-not-participant` / `unsupported` for an ineligible type). A
+normal ship message has no actor row → `actor-missing`; another actor's message →
+`actor-mismatch`. `our.bowl` always remains the real Urbit author.
+
+**Local vs remote (Phase G3B).** Eligible notes are `%notebook`/`%group` the actor owns or
+participates in (DMs stay `unsupported` until actor DMs exist). The action re-enters the
+**same** internal `%edit-message`/`%delete-message`, and the host of the note decides what
+happens — **no new wire shape is added**:
+
+- **Local-hosted** (`our.bowl == note.creator`): the edit/delete is applied durably here and
+  broadcast to members. Result **`actor-edited`** / **`actor-deleted`** (with `noteId`,
+  resolved `msgId`, `eid`). A local delete also prunes that message's `via`/`actor`
+  attribution rows; pin-prune is unchanged.
+- **Remote-hosted** (`our.bowl != note.creator`, a participated `%group`): after all local
+  ownership/capability/participation checks pass, the internal handler forwards the existing
+  **`%remote-edit-msg`/`%remote-delete-msg`** poke to the note's creator. This is
+  **handed-off, not host-confirmed** → result **`accepted`** ("actor edit/delete forwarded to
+  host"), never `actor-edited`/`actor-deleted`. The remote host may still reject (membership,
+  mute, missing target, authorship). For a forwarded **delete** we **keep** the local message
+  and its `via`/`actor` rows until the host's authoritative `%message-deleted` (carrying the
+  `eid`) arrives — the subscriber path then prunes them, so the message renders with the right
+  actor while in flight. A forwarded **edit** never rewrites `actor-by-eid`, so the host's
+  `%message-edited` (same `eid`) re-renders as the same actor. Read back the note after
+  propagation to see the durable result.
+
+**Trust boundary.** `%remote-edit-msg`/`%remote-delete-msg` are **unchanged** and remain fully
+ship-authenticated on the host: the source ship must be a current member, not blocked/muted,
+the target resolves eid-first, and **`message.author == src.bowl`** (and the host owns the
+note). The host does **not** trust any client-supplied actor identity — the message is
+cryptographically authored by the sending **host ship**, and *local* Noltbook governance is
+what decides which actor under that ship was allowed to request the mutation. A mismatch never
+falls back to a host-authored edit/delete.
+
+### Actor Notes — create/configure owned notes (Phase D)
+
+| action | data | result |
+|---|---|---|
+| `create-actor-note` | top-level `app` + `actor` + `{ name }` | `actor-note-created` / `actor-invalid` / `invalid-name` / `app-not-granted` / `app-disabled` / `actor-suspended` / `actor-revoked` / `cap-missing` |
+| `configure-actor-note` | top-level `app` + `actor` + `{ noteId, name?, visibility?, writable?, headline?, iconUrl? }` | `actor-note-configured` / `missing-note` / `actor-invalid` / `actor-not-owner` / `invalid-name` / `invalid-visibility` / `rejected` / governance codes above |
+| `delete-actor-note` (Phase G1) | top-level `app` + `actor` + `{ noteId }` | `actor-note-deleted` (with `noteId`) / `missing-note` / `actor-invalid` / `actor-not-owner` / `rejected` / governance codes above |
+
+An app actor can **create** a note and **configure notes it owns**. The note's real
+`creator` **stays the host ship** (`our.bowl`); Noltbook *separately* records the actor as
+the note's durable owner in `note-actor-owners`, keyed by note id.
+
+- **Stable authority is `[host, desk, id]`.** The mutable `name`/`kind`/`status` are never
+  used for authorization — only resolved for display at read time.
+- **`create-actor-note`** requires `attribute` + `create-note`; creates a **root
+  `%notebook`** only (no parent/child, no actor find-or-create this phase). Configure it
+  afterward.
+- **`configure-actor-note`** requires `attribute` + `configure-note`; checks owner match
+  **first** — a missing owner (ordinary host-created note) or a different actor sharing the
+  same desk/host → **`actor-not-owner`**. It reuses the same internal rename/meta/headline
+  handlers and validation as `set-note-config` (empty name → `invalid-name`; visibility
+  `public`/`private`/`secret`; omitted field kept; `iconUrl:""`/`headline:""` clear).
+- **`delete-actor-note`** (Phase G1) requires `attribute` + **`delete-own-note`**; deletes a
+  note the **exact** actor owns. Ownership (`note-actor-owners[noteId] == [our.bowl, app.desk,
+  actor.id]`) is checked **first** — a different actor under the same app, an ordinary
+  host-created note, a note owned through another app desk, or a remote-hosted note all →
+  **`actor-not-owner`** (and never TOFU-register the actor). It **reuses Noltbook's internal
+  `%delete-note`**, so it inherits the host deletion behavior verbatim. For every id in the
+  deleted **subtree** (root + descendants) it removes the specific maps the internal path
+  handles — `notes`, `messages`, `mentions`, `active-calls`, `gossip-envelopes`, `headlines`,
+  `seq-counters`, `join-requests`, `note-admins`, `note-muted`, `artifact-envelopes`,
+  `artifacts`, and the **`note-actor-owners` + `actor-note-participation` rows** — and fires
+  `%note-deleted`/remote-delete cards. (It does **not** sweep some newer per-note maps such as
+  `note-pins`, `note-apps`, and `note-active`, which may retain harmless stale rows; reads
+  always filter against the live `notes` map.) The host stays the real `@p` `creator`; this is
+  the *actor* path, not a new host-deletion surface.
+- The **app grant is the ceiling**; per-actor caps may narrow it (`cap-missing` reports
+  "app lacks %x" or "actor lacks %x"). Suspended/revoked actors and disabled apps are
+  blocked. **No host fallback** — a missing/invalid actor returns `actor-invalid`, never a
+  host action.
+- **Host authority is unchanged:** the host user can still create/configure/delete any
+  note via the normal `create-note` / `set-note-config` / delete APIs, including
+  actor-owned ones.
+- **Ownership is host-local this phase.** It is **not** propagated; remote members read
+  `actorOwner: null`. Deleting a note (host `delete-note`) drops its ownership row. **No
+  actor artifact access.**
+
+Read shape — `actorOwner` appears on `/api/notes/<id>` and `/api/notes/<id>/meta`:
+```json
+"actorOwner": null | { "host":"~zod", "desk":"noltbook-dev", "id":"rick",
+                       "name":"Rick", "kind":"user", "status":"active" }
+```
+`host`/`desk`/`id` are authoritative (from `note-actor-owners`); `name`/`kind`/`status` are
+resolved from the actor registry at read time (null if the registry row is gone). It is
+**not** on the `/api/notes` list this phase.
+
+### Actor Notes — mandatory participation (Phase G2)
+
+Actors **no longer inherit access to every note their host planet holds.** An actor
+`[app.desk, actorId]` may use a **regular** note only when it **owns** the note
+(`note-actor-owners`) or has a **participation** row for it (`actor-note-participation`).
+The host **@p** remains the real `note.users` member; **actors never enter `note.users`.**
+
+**Enforced (own-or-participate)** on `post-message`, `post-app-ref`, `edit-actor-message`,
+and `delete-actor-message` whenever a valid actor is attributed. A valid actor without
+access → **`actor-not-participant`**; a valid actor on an **excluded** type
+(`%dm`/`%gossip`/`%cover`/`%ars-rumors`) → **`unsupported`**; it never silently falls back to
+a host-authored post. **No-actor host posts are unchanged.** Eligible types are
+`%notebook`/`%group`. For edit/delete the existing exact `actor-by-eid` ownership check is
+retained **and** current ownership/participation is also required — an actor that no longer
+participates cannot edit/delete its earlier messages through the actor API.
+
+> **Behavior change:** existing historical actor messages are untouched, but actors can no
+> longer create new activity in arbitrary host-accessible notes until participation is
+> explicitly granted. (`%delete-own-message` etc. remain independently revocable.)
+
+| action | data | result |
+|---|---|---|
+| `actor-join-note` | `app`+`actor` + `{ noteId }` | `actor-note-joined` / `missing-note` / `unsupported` (type) / `rejected` (host does not hold the note) / `actor-invalid` / governance |
+| `actor-add-participant` | `app`+`actor` + `{ noteId, targetId }` | `actor-participant-added` / `actor-not-owner` / `actor-invalid` (target empty/not registered) / `actor-revoked` (target revoked) / `missing-note` / governance |
+| `actor-remove-participant` | `app`+`actor` + `{ noteId, targetId }` | `actor-participant-removed` / `actor-not-owner` / `missing-target` (not a participant) / `rejected` (own row) / `missing-note` / `unsupported` (type) / governance |
+| `actor-leave-note` (Phase G3) | `app`+`actor` + `{ noteId }` | `actor-note-left` (with `noteId`) / `missing-note` / `unsupported` (type) / `rejected` (owner must delete) / `actor-not-participant` (incl. repeat) / `actor-invalid` / governance |
+
+The first three require `%attribute` + **`%participate-note`** (the app grant is the ceiling;
+per-actor caps narrow). **`%participate-note` gates only changing participation** — removing
+it does not erase existing rows, and `%post-message`/`%edit-own-message`/`%delete-own-message`
+stay independently revocable.
+
+- **`actor-join-note`** — the app associates **its own active actor** with a note the host
+  already holds (`our.bowl ∈ note.users`), type `%notebook`/`%group`. Idempotent.
+- **`actor-add-participant`** — the **owner** actor grants another **same-desk** actor a row.
+  The target must already exist in `actor-registry` under the same app desk (the key is
+  `[app.desk, targetId]`, so cross-desk targets are structurally impossible); a **revoked**
+  target is rejected, a **suspended** target may be recorded (but stays unable to act).
+  Idempotent.
+- **`actor-add-participant`/`actor-remove-participant`** require the caller to **exactly own**
+  the note (`actor-not-owner` otherwise, checked **before** the gate so a non-owner never
+  TOFU-registers). The owner **cannot remove its own required row** (`rejected`); removing the
+  last row deletes the map entry. **This is not leave** (see `actor-leave-note` below).
+- **Atomic:** governance runs first and the candidate registry is **held**; a failed note/owner/
+  target check commits nothing (no TOFU, no `last-seen` bump). Every `requestId` emits a
+  visible `/api/results` fact.
+- **Seeding/cleanup:** a new `create-actor-note` registers its owner as a participant
+  automatically (state-59 migration seeds participation from every existing
+  `note-actor-owners` row — nothing inferred from message history or host membership).
+  `%delete-note` and the internal **ship-level** `%leave-note` paths prune participation for
+  every removed id; reads always filter against the live `notes` map, so any stale row on an
+  exotic removal path is harmless. Multiple local actors may participate in the same note.
+
+#### Actor leave (Phase G3)
+
+**`actor-leave-note { app, actor, data:{ noteId } }`** lets an actor leave a note it
+**participates** in by removing **only** its own `[app.desk, actor.id]` row (requires
+`%attribute` + **`%leave-note`**). On success → **`actor-note-left`** (with `noteId`).
+
+**This is the *actor* leave — NOT Noltbook's internal ship-level `%leave-note`.** The internal
+handler removes the host **@p** from a note (unsubscribe, `%remote-leave`, drop the subtree);
+`actor-leave-note` **never invokes it.** It does **not** touch `note.users`/`note.removed`,
+does not unsubscribe, sends **no `%remote-leave` or any wire traffic**, deletes no
+messages/artifacts, never removes the note from the host's `notes` map, never touches
+`note-actor-owners`, and never affects another actor's participation. **Historical actor
+messages stay stored** in the host's note.
+
+- **Validation order:** app → actor → kind → note exists (`missing-note`) → eligible type
+  `%notebook`/`%group` (`unsupported`) → exact owner → **`rejected`** ("owner must delete the
+  note rather than leave", *not* `actor-not-owner`) → must currently participate, else
+  **`actor-not-participant`** (a **repeated** leave hits the same no-row state and also returns
+  `actor-not-participant`) → governance `{%attribute %leave-note}`. Ownership and participation
+  are checked **before** the gate, so a non-participant is **never** TOFU-registered and gets no
+  `last-seen` update; the candidate registry is committed only on success.
+- **After leaving:** the actor-scoped list no longer includes the note, the actor-scoped detail
+  returns 404, and new actor **post/edit/delete** return `actor-not-participant`. **Host-wide
+  note access is unchanged**, and **another participating actor keeps access**.
+
+**Actor-scoped reads** (ergonomic views for apps like Skiff — *not* hard isolation from a
+malicious local agent; host-wide APIs are unchanged). Both routes run the **same
+`actor-note-access`** gate as enforcement, so they expose **only eligible `%notebook`/`%group`
+notes** the actor owns or participates in — a stale ownership/participation row pointing at a
+`%dm`/`%gossip`/`%cover` note is **never** surfaced:
+
+- `/api/actors/<desk>/<id>/notes` → `{ notes: [ { id, name, type, creator, visibility,
+  writable, userCount, lastAuthor, lastPreview, actorOwner, owned, participant } ] }` — only
+  eligible notes the actor **owns or participates in**, filtered to live notes; 404 if the
+  actor is not registered. **No artifact data.**
+- `/api/actors/<desk>/<id>/notes/<noteId>` → `{ noteId, note: {…summary…}, messages: [ …with
+  `actor`/`via` attribution… ] }` — 404 if the actor/note is missing, the type is ineligible,
+  or the actor neither owns nor participates. **No artifact details, versions, URLs, or
+  pin/artifact-target data.**
+
+> **Remote actor edit/delete (Phase G3B):** the old host-local rejection is **removed** — a
+> participating actor may now edit/delete its own message in a **remote-hosted `%group`** note.
+> Local-hosted ops return `actor-edited`/`actor-deleted`; remote-hosted ops **forward** the
+> existing `%remote-edit-msg`/`%remote-delete-msg` (no new wire shape) and return **`accepted`**
+> (handed-off, not host-confirmed — read back after propagation). DMs stay `unsupported` for
+> actors until actor DMs exist. See *Actor Tools (Phase B / G3B)* above.
+
+No actor **forks / notifications / artifacts** in G2/G3. (Actor leave landed in G3; actor DMs
+land in G5A — see below.)
+
+### Actor DMs — private actor-owned conversations (Phase G5A)
+
+An **actor DM** is a **secret two-ship `%group` note** (NOT a canonical `%dm`): hosted by the
+actor's host planet, durably **owned** by the actor (`note-actor-owners`), **marked** as an
+actor DM (`actor-dm-notes` → `actor-dm-meta`), and containing **exactly** the host ship + one
+remote target. Isolation comes from the **unique note id + message store**: Rick→`~wet` and
+Alice→`~wet` are **different notes**. Canonical ship DMs (`%create-dm`/`find-dm-root`) are
+**untouched** and remain **`unsupported` for actors**.
+
+| action | data | result |
+|---|---|---|
+| `find-or-create-actor-dm` | top-level `app`+`actor` + `{ ship }` | `actor-dm-created` (new, with `noteId`) / `found` (existing) / `invalid-ship` / `rejected` (self / blocked) / `actor-invalid` / governance |
+| `actor-adopt-dm` | top-level `app`+`actor` + `{ noteId }` | `actor-dm-adopted` (incl. idempotent) / `unsupported` (not an actor-DM note) / `rejected` (not addressed to us / invariant broken / already adopted by another local actor) / `missing-note` / governance |
+
+- **`%send-dm`** is a new `app-cap` (app-grant ceiling + per-actor narrowing). The specialized
+  DM API gates `%attribute` + `%send-dm`. Inside a **marked** actor-DM note, ordinary message
+  actions require their existing cap **plus `%send-dm`**: send → `post-message`+`send-dm`; edit
+  → `edit-own-message`+`send-dm`; delete → `delete-own-message`+`send-dm`. Revoking `%send-dm`
+  **disables actor activity in existing actor-DM notes without deleting them**.
+- **Idempotent** per `[owner.host=our, owner.desk, owner.id, target]`: a live valid conversation
+  is returned (no re-create/invite). A marker whose note is gone/invalid is treated as **stale**,
+  pruned, and a new conversation is created. **Creation** mints the note id with the normal
+  formula, **reuses** the internal `%create-note` (secret `%notebook`) + `%invite-to-note` (the
+  notebook→`%group` normalization and remote invite are not duplicated), writes
+  owner/participation/marker, and sends the **new** `%remote-actor-dm-meta` after the invite. The
+  note **name** is the canonical actor display name, e.g. `Rick (DM with ~wet)`.
+- **Membership invariant** (`actor-dm-valid`): `type==%group`, `visibility==%secret`,
+  `creator==owner.host`, `users == {owner.host, target}`. If host UI or another path breaks it,
+  actor-DM actions **reject/`unsupported`** — never silently treated as an ordinary actor note.
+  Actor member-management APIs **cannot add a third ship**.
+- **Manual actor-to-actor adoption.** Automatic actor→actor destination routing is **not**
+  available (the remote invite carries no destination actor). On the **target** host, **one**
+  local actor calls `actor-adopt-dm` to claim the conversation (adds its participation row);
+  duplicate adoption by the same actor is idempotent, a different local actor → **occupied/
+  rejected**. After adopting, the actor reads/posts through the normal actor-scoped paths.
+- **Isolation enforcement.** On the **owner** host only the exact owner actor may act; on the
+  **target** host only the single adopted actor. `actor-note-access` is DM-aware: it validates
+  the invariant and grants only owner/participant. **Generic participation never bypasses DM
+  isolation** — `actor-join-note`, `actor-add-participant`, `actor-remove-participant`,
+  `configure-actor-note`, the actor **member-management** actions, and **`post-app-ref` as an
+  actor** all return **`unsupported`** on a marked actor-DM note. No artifact actions.
+- **Messages use normal `%group` transport** (no destination-actor wire field is added).
+  Remote-hosted adopted actors still use **G3B `accepted` forwarding** for edit/delete.
+- **Remote metadata** (`%remote-actor-dm-meta`, sent after the invite) is validated by the
+  receiver: `meta.owner.host == src.bowl`, `meta.target == our.bowl`, actor-id cap; if the note
+  already exists it must be `src.bowl`'s secret `%group` containing both ships; a marker claiming
+  **another host is rejected**. Metadata arriving before the invite may be stored provisionally —
+  all reads/access re-verify against the **live note** via `actor-dm-valid`. **req-id has no
+  durable pending map; the host can only assert markers under its authenticated `src.bowl`.**
+  These are **new** variants — **all ships must run matching code** before remote actor-DM testing.
+- **Cleanup.** `delete-actor-note` on the owner host removes the marker through the reused
+  internal `%delete-note` (which prunes `actor-dm-notes` for the whole subtree and emits
+  `%actor-dm-updated noteId null`). `actor-leave-note` on an **adopted** remote actor DM removes
+  **only** the local participation row — the note + marker stay (another local actor may then
+  adopt). When the **remote host deletes** a note but Noltbook keeps a **host-deleted archive**,
+  the marker is **retained** (useful, and reads re-validate). *Known harmless:* the ship-level
+  `%leave-note` / convert-to-dm paths may leave a stale marker for a removed note; reads and the
+  on-watch snapshot filter against the live `notes` map, so it never surfaces.
+
+Reads (`actorDm` = the marker object `{ host, desk, id, ownerName, ownerKind, target, createdAt }`):
+- `/api/actors/<desk>/<id>/dms` → `{ dms: [ { noteId, actorDm, target, counterpart, createdAt,
+  lastAuthor, lastPreview, owned, adopted } ] }` — only **valid live** actor-DM notes the actor
+  **owns or adopted**; the owner host's `counterpart` is the **target ship**, an adopted target's
+  `counterpart` is the **owner actor**. No artifacts. 404 if the actor is unregistered.
+- `actorDm` is added to `/api/notes/<id>`, `/api/notes/<id>/meta`, and the actor-scoped note
+  summary/detail (null when the note is not a marked actor DM).
+
+**Main frontend (G5A + G5B):** the marker is hydrated into `state.actorDms` (live
+`%actor-dm-updated` fact + on-watch snapshot + note-deleted cleanup), and **G5B renders a
+valid marked actor DM as a direct conversation** (it stays technically a `%group`). A shared
+`actorDmView(note)` resolver returns a presentation object **only** when the durable marker is
+present **and** the full invariant holds (secret two-ship `%group`, `creator==owner.host`,
+`users == {owner.host, target}`, current ship is owner.host or target) — a "two-person group"
+alone is never an actor DM. Presentation is **perspective-aware**:
+
+- **Owner host:** the conversation shows the **target ship**'s display name + ship avatar/sigil,
+  with the context line *"Rick via %noltbook-dev"* in the actor color (`#65a9e8`). Context menu:
+  **Profile (target ship)** + **Delete**.
+- **Target host:** the conversation shows the **owner actor**'s resolved display name + actor
+  avatar (first-letter fallback, **never** a sigil), with the context line *"%noltbook-dev on
+  ~zod"*. Context menu: **Actor Profile** + **Leave**.
+
+Actor DMs stay in **SHARED NOTES** (no new section), keep normal unread/attention/call/preview
+behavior, and resolve the owner profile through the **G4 cache** (`requestActorProfile`), so the
+sidebar/header update without a refresh. The chat header gains a compact, clickable actor-DM
+context element (opening `viewActorProfile` via the delegated `data-*` path — no actor value in
+inline JS). **SHARE** and **file/artifact upload** controls are **hidden** (actors have no
+artifact access). If the marker is cleared or its invariant breaks (e.g. `note-users-updated`
+adds a third ship), `actorDmView` returns null and the note **immediately falls back to ordinary
+group presentation**. Canonical `%dm` notes and ordinary groups are visually/behaviorally
+unchanged. No actor creation/adoption/governance controls are added to Noltbook — those remain
+app/API responsibilities.
+
+### Actor Notifications — read/unread state (Phase G6A)
+
+Each actor has an **independent per-note message read cursor** (`actor-note-read`, keyed
+`[app.desk, actor.id] -> (map noteId @da)`, **state-62**). Reading as Rick **never** marks the
+note read for Alice or for the host ship, and the host ship's own unread cursor (`note-read`) is
+**never touched**.
+
+> **Message-only activity.** Actor unread is the newest **message** visible through the
+> actor-scoped API vs the actor's cursor — it does **not** use the host-wide `note-activity` map
+> (which also advances for artifacts). **Actors have no artifact access, so an artifact never
+> makes an actor note unread.**
+
+| action | data | result |
+|---|---|---|
+| `actor-mark-note-read` | top-level `app`+`actor` + `{ noteId }` | `actor-note-read` (with `noteId`) / `missing-note` / `unsupported` (type) / `actor-not-participant` / `rejected` (actor-DM invariant) / `actor-invalid` / governance |
+
+Requires `%attribute` + the new additive cap **`%manage-own-notifications`** (app-grant ceiling
++ per-actor narrowing). It runs **`actor-note-access`** (so owner/participate + actor-DM
+host-role rules + honest codes are inherited), holds the candidate registry until every check
+passes, then **monotonically advances** only this actor's cursor to the newest stored message
+(never decreasing; no messages → no row but still success). It **never** calls the internal
+`%mark-note-read`.
+
+- **Seeding (no retroactive unread).** A cursor is seeded to the current newest message only when
+  a **new** participation row is established — `create-actor-note` owner, `actor-join-note`,
+  `actor-add-participant` target, `find-or-create-actor-dm` owner (newly created), and
+  `actor-adopt-dm` adopter — so joining an existing note does **not** mark its history unread.
+  A **duplicate** `actor-join-note`/`actor-add-participant` (the row already exists) is still
+  idempotent success but does **not** reseed — an existing actor's cursor and unread state are
+  left byte-for-byte unchanged, so re-adding an actor can never silently clear its unread. A
+  genuine rejoin after `actor-leave-note`/`actor-remove-participant` (which delete the cursor)
+  reseeds to current. The **state-62 migration** seeds every existing participating actor through
+  the newest stored message per note (notes with no messages get no row).
+- **Own posts.** An actor's own successful `post-message`/`post-app-ref` advances **its** cursor
+  (to the local message time); the subscribed `%new-message` receipt advances it again to the
+  exact host-restamped id when `actor.host == our.bowl` (covers remote-hosted notes). A
+  host-authored or remote-ship message advances **no** actor cursor — other actors stay unread.
+- **Cleanup.** The cursor is removed on `actor-remove-participant`, `actor-leave-note`, and
+  every `prune-participation` / `%delete-note`-subtree path (via `actor-read-prune`, which drops
+  the deleted note ids from **every** actor's nested map and removes emptied inner maps).
+  Suspend/revoke **retains** cursors for reactivation.
+
+Reads — `/api/actors/<desk>/<id>/notes`, `…/notes/<noteId>`, and `…/dms` each now include
+**`activity`** (newest visible message time in ms, or null), **`read`** (this actor's cursor in
+ms, or null), and **`unread`** (`activity > read`). These reads use `actor-note-access` exactly as
+before, never mutate state, omit inaccessible notes, and stay **message-only**. Host-wide
+`/api/notes` and the main Noltbook unread state are unchanged. (No actor reply notifications or
+mentions in G6A.)
+
+### Actor Notifications — directed reply notifications (Phase G6B)
+
+Each actor has a durable list of **directed reply notifications** (`actor-notifications`, keyed
+`[app.desk, actor.id] -> (list actor-notification)`, **state-63**). When a new **message** replies
+directly to a message attributed to an actor, that exact `[host desk id]` actor gets a notification
+— and **no host attention is created for an actor-owned parent**. The parent is resolved by
+`reply-to-eid` first, then the legacy `reply-to` (`@da`) fallback for old text replies, then looked
+up in `actor-by-eid`; a parent with no actor row keeps the existing host reply/send attention
+unchanged. **Reply-only** — actor mentions and artifact replies remain deferred.
+
+- **Cross-ship.** Notifications are computed independently wherever a message is stored (local
+  post, host `%remote-message`, subscribed `%new-message`; actor-DM messages flow through those
+  same group paths). A notification is created **only on the target actor's host** (`actor.host ==
+  our.bowl`) and only if that actor currently **owns or participates** per `actor-note-access` (so
+  actor-DM owner/adopter rules are enforced). A remote host storing the same message never notifies
+  an actor hosted elsewhere. No extra remote wire field is added.
+- **Canonical registry required.** The target actor must have an **existing, non-revoked**
+  `actor-registry` row. A **missing** row — historical `actor-by-eid` attribution can predate the
+  registry migration — creates **no** notification and is never silently TOFU-registered; a
+  **revoked** target creates none either. An actor-attributed parent **still suppresses host
+  attention** even when its registry row is missing or revoked (it does not fall back to host
+  reply attention).
+- **Sender identity.** If the reply carries an actor, the sender is `[%actor host desk id]`;
+  otherwise `[%ship author]`. A reply from the **exact same actor to itself** creates nothing; a
+  host-ship reply is a **distinct** identity from an actor under that host (so a normal `~zod` reply
+  to Rick **does** notify Rick), and different actors under the same host/app are distinct.
+- **Preferences.** The target actor's `actor-preferences` apply: a sender in **muted** OR
+  **blocked** suppresses the notification — but the message still posts, and host
+  pal/block/mute/attention state is never touched. **Active and suspended** actors accumulate
+  notifications (suspension does not lose activity); **revoked** actors receive none. Existing
+  history may remain after suspension/revocation.
+- **Durable read + live event.** `GET /api/actors/<desk>/<id>/notifications` returns
+  `{ host, desk, id, notifications: [ { kind, noteId, eid, msgId, author, actor|null, preview,
+  timestamp } ] }`, **newest-first**, resolving `author`/`actor`/`preview` from current state (so an
+  edited message shows its current preview; rows whose replying message is gone are dropped). The
+  **`timestamp` is the replying message's own `timestamp`** (identical on every ship), not the local
+  receipt time; the durable record keeps an internal `created-at` for append-order/audit only.
+  Ordering stays newest-first by stored append order (the timestamp correction did not change it).
+  Live `%actor-notifications-updated desk id notifications full` facts arrive on `/api/results`:
+  `full=false` is a **delta** (the new reply); `full=true` is the **authoritative remaining list**
+  (after a clear or any deletion/note-removal prune). `/api/results` is live-only; the read route is
+  the durable recovery surface after reconnect.
+- **Clearing.** `actor-clear-notification {noteId, eid}` drops one row (missing → `missing-target`);
+  `actor-clear-notifications` drops all (idempotent success). Both gate **`%attribute` +
+  `%manage-own-notifications`** (candidate registry held until validation succeeds). **mark-read and
+  clear are independent** — clearing never marks the note read, and `actor-mark-note-read` never
+  clears notifications. Clearing never touches host mentions/attention/note-read.
+- **Cleanup (live).** Deleting the replying message drops notifications targeting its `eid` (host +
+  member paths, so a missed fact can't strand a row); `actor-remove-participant` / `actor-leave-note`
+  drop that actor's notifications for the note; note/subtree deletion and ship-level note removal
+  prune notifications for the removed note ids; empty per-actor rows are deleted. **Every** pruning
+  path emits an authoritative `full=%.y` event to each actor whose list actually changed (a shared
+  old-vs-new diff resolves remaining rows against the post-mutation state and stays silent when
+  nothing changed), so live `/api/results` clients drop stale rows without rereading — including
+  member-side deletes (apps may not watch `/notes`). Message **edits** keep notifications (the read
+  shows the current edited preview).
+- **state-63 migration** initializes `actor-notifications` **empty** — no retroactive notifications;
+  messages, actors, cursors, and host attention are not rewritten.
+
+**Harness smoke (sec. 3 + sec. 8c2).** The harness sends replies by stable `eid`, so a reply must be
+posted with the **Reply to Selected Message** button (the normal **Send** button always posts a root
+message with `replyToEid:null` and never inherits the selected message):
+
+1. Rick and Alice are both **active** with app/actor caps for `attribute`, `post-message`, and
+   `manage-own-notifications`, and each **owns or participates** in the selected note.
+2. Post a **root** message as Rick with **Send** (sec. 3).
+3. Click Rick's message row to select it — the **"Reply target"** line shows Rick's actor/eid.
+4. Change **Actor Identity** to Alice.
+5. Click **Reply to Selected Message** — Alice posts a reply carrying `replyToEid = Rick's eid`; the
+   reply target clears to "none" on success.
+6. Change **Actor Identity** back to Rick.
+7. **Read Actor Notifications** (sec. 8c2) — the row identifies **Alice** as the replying actor.
+
+| Action | Params | Success / failure codes |
+| --- | --- | --- |
+| `actor-clear-notification` | top-level `app`+`actor` + `{ noteId, eid }` | `actor-notification-cleared` / `missing-target` / `actor-invalid` / governance |
+| `actor-clear-notifications` | top-level `app`+`actor` | `actor-notifications-cleared` (idempotent) / `actor-invalid` / governance |
+
+### Actor → host notification parity (Phase A)
+
+An actor is a **distinct behavioral sender** even though its host `@p` is the cryptographic
+author. For regular notebook/group notes (including actor-DM `%group` notes), on the actor's host:
+
+- A **locally hosted actor post** behaves as **incoming activity** for the host: it advances
+  `note-activity` (host unread shows) but **does not** advance host `note-read` and emits no
+  `note-read` fact. An **ordinary host post** (no actor) is unchanged — it advances `note-read` and
+  emits the fact as before. (Predicate: `host-self = author==our && actor absent`.)
+- An actor **reply to a normal host-authored message** may create host `%reply` attention; an actor
+  writing **`@~host`** may create host `%mention` attention (ordinary host self-mentions stay
+  ignored; `cleared-mentions` tombstones + eid-first identity preserved).
+- A reply **to** an actor parent stays in that actor's G6B notifications and **never** falls back to
+  host attention (G6B `parent-is-actor` suppression preserved); an actor replying to **itself** is
+  still suppressed (G6B self-reply rule).
+- Remote-ship messages and ordinary host posts are unchanged. Same behavioral-sender rule applies on
+  the host `%remote-message` receiver and the subscribed `%new-message` rebroadcast path.
+- **Default ON.** Per-actor / per-user **mute/block** controls are **not** part of Phase A (they
+  arrive in Phase B). No state bump, no new caps, no wire change in Phase A.
+
+**Harness smoke (sec. 3 + main Noltbook):** with `api-test` **closed** in main Noltbook, post a root
+message as **Rick** (sec. 3) → `api-test` shows **unread** for the host; **open/view** it → normal
+delayed mark-read clears it. Post as **ordinary host** (Actor Identity off) → **no** self-unread.
+Post a normal host parent, close the note, reply to it as **Rick** → host gets reply attention; an
+`@~host` mention from Rick → host gets mention attention. Alice→Rick reply → Rick's G6B notification
+only (host gets nothing).
+
+### Real-user actor mute/block + separate unread activity (Phase B)
+
+The **real ship user** has ONE notification-preference system for **any** actor — local or remote —
+keyed by the full stable `[host,desk,id]` (display name is never authority). Notifications are **ON by
+default**; absence from the sets = on.
+
+- **Recency vs unread are separate signals.** `note-activity` still drives sidebar **ordering** for
+  every real message; a new durable `note-unread-activity` drives the **green unread dot** (durable
+  unread = `note-unread-activity > note-read`). The **state-64 migration** seeds `note-unread-activity`
+  from `note-activity` so existing unread is preserved. Muting never advances `note-read` to clear a
+  dot (that would clear unrelated senders' unread).
+- **Mute actor:** suppresses that actor's host green-unread **contribution** + host reply/@~host
+  mention attention for the real user. The message is still stored, delivered, attributed, and still
+  advances the actor's own G6A read cursor and (separately) any actor-owned **G6B** notifications.
+  Recency (`note-activity`) still advances. The post is never rejected; the actor is never
+  suspended/revoked; other users are unaffected.
+- **Block actor:** mute **plus** the frontend hides that actor's message/pin **content** behind a
+  compact *blocked actor* placeholder with a session-only **VIEW** (reveal is per session, not
+  persisted). Blocking an actor **never** adds the actor's host ship to `pal-blocked`, never removes
+  it from group membership, and never disables the app/actor. Block and mute are independent
+  (`unblock` ≠ `unmute`); effective suppression = muted **OR** blocked.
+- **Preference timing.** Changes apply to **future** unread/attention. Muting does **not**
+  retroactively clear an existing unread dot — open/mark the note read normally. Blocking hides
+  existing actor content immediately.
+
+| Action (API `noltbook-api`) | Input | Result codes |
+| --- | --- | --- |
+| `mute-actor` / `unmute-actor` | `{ host, desk, id }` | `user-actor-muted` / `user-actor-unmuted` · `invalid-ship` / `invalid-actor` / `missing-target` (unmute of an un-muted) |
+| `block-actor` / `unblock-actor` | `{ host, desk, id }` | `user-actor-blocked` / `user-actor-unblocked` · `invalid-ship` / `invalid-actor` / `missing-target` (unblock of an un-blocked) |
+
+Internal `noltbook-action` equivalents (`mute-actor`/…`/unblock-actor`) carry a typed `actor-ref`.
+Targets need **not** exist locally (remote actors are valid; no TOFU/last-seen). Read
+`GET /api/user/actor-preferences` → `{ muted:[{host,desk,id}], blocked:[{host,desk,id}] }` (stable
+identity only; profile/display resolution stays client-side). Every mutation + the `/notes` watch
+replay a single authoritative `%user-actor-preferences` snapshot; the API also mirrors it on
+`/api/results`. The main-Noltbook actor profile modal has **MUTE/UNMUTE** + **BLOCK/UNBLOCK**
+buttons. Harness: **sec. 2.95 Host/User Actor Preferences** (separate from the actor's own sec. 2.9
+preferences). Suppression is enforced on all three actor message paths (local `%send-message`, host
+`%remote-message`, subscribed `%new-message`); canonical `%dm`/gossip/cover/rumor/envelope/artifact
+paths are outside actor suppression.
+
+### Actor Member Management (Phase E)
+
+An app actor may manage the **real `@p` members** of notes it owns. Members stay ships —
+actors are never inserted into `note.users`. Each action carries top-level `app` + `actor`
++ `{ noteId, ship }` and requires the `%manage-members` capability.
+
+| action | data | result |
+|---|---|---|
+| `actor-add-member` | `{ noteId, ship }` | `actor-member-added` / `rejected` (already a member) / failures below |
+| `actor-remove-member` | `{ noteId, ship }` | `actor-member-removed` / `missing-target` (not a member) / `rejected` (admin) |
+| `actor-approve-join` | `{ noteId, ship }` | `actor-approved` / `missing-target` (no pending request) |
+| `actor-deny-join` | `{ noteId, ship }` | `actor-denied` / `missing-target` |
+| `actor-mute-member` | `{ noteId, ship }` | `actor-muted` / `missing-target` (not a member) / `rejected` (admin) |
+| `actor-unmute-member` | `{ noteId, ship }` | `actor-unmuted` / `missing-target` (not muted) |
+
+Common failures: `actor-invalid`, `actor-not-owner`, `invalid-ship`, `missing-note`,
+`cap-missing`, `app-not-granted`, `app-disabled`, `actor-suspended`, `actor-revoked`,
+`rejected`.
+
+Authorization (shared gate): note exists → `app`+`actor` valid → **exact owner match**
+`[host=our, desk=app.desk, id=actor.id]` (else `actor-not-owner`) → `gate-actor-cap`
+with `{attribute, manage-members}` → parse ship → write-blocked/DM `rejected` →
+**target ≠ host** `rejected` → per-action target-state check → reuse the existing internal
+handler.
+
+- **Exact ownership only.** Alice cannot manage Rick's note even via the same desk/host;
+  an ordinary host-created note has no owner → `actor-not-owner`.
+- The **app grant is the ceiling**; per-actor caps may narrow it (`cap-missing` → "app
+  lacks %manage-members" / "actor lacks %manage-members").
+- **Durable host-local.** Because actor-owned notes have `creator=our.bowl`, all successes
+  are durable (never `accepted`/forwarded); the **host ship sends the real remote
+  invite/kick pokes**, best-effort exactly as the internal handlers already do.
+- **`actor-add-member` converts an actor-owned `%notebook` to `%group`** on the first
+  member (the only way to have members). It never creates a DM — actor DM creation is a
+  separate, deferred action.
+- **Host & admins are protected.** An actor can never target the host ship, and
+  `actor-remove-member` / `actor-mute-member` reject any ship in `note-admins` — admin
+  assignment stays host-controlled.
+- **Host-only (not exposed to actors):** `make-admin` / `remove-admin` (privilege
+  escalation) and `deny-block-join` (its host path mutates global `pal-blocked`). The
+  existing host membership/admin APIs are unchanged.
+- **No durable actor audit this phase.** The actor is validated during the request, but
+  *which* actor performed a membership action is **not persisted**; the result fact is
+  live-only and remote members see the **host ship** as the authority. No actor artifact
+  access.
+
+### Actor Social — profile & status (Phase F1)
+
+An actor maintains its own **profile**: a mutable display name plus avatar, bio, and
+free-form status text. Requires `%attribute` + `%update-own-profile`.
+
+| action | data | result |
+|---|---|---|
+| `update-actor-profile` | top-level `app`+`actor` + `{ displayName?, avatar?, bio?, statusText? }` | `actor-profile-updated` / `actor-invalid` / `invalid-name` / `invalid-avatar` / `cap-missing` / `app-not-granted` / `app-disabled` / `actor-suspended` / `actor-revoked` |
+
+Every field is **three-state**: *absent* = keep, *`null`* = clear/reset, *value* = set.
+
+- **`displayName`** is stored in **`actor-record.name`** (the canonical name), not in the
+  profile. `null` resets it to the actor **id**; a string is capped to 64 bytes; empty
+  after capping → `invalid-name`.
+- **`avatar`** is `{ type, url }` with `type` ∈ `s3`/`ipfs`/`external` — **`%urbit` is not
+  allowed** (an actor is not a native Urbit identity; verified sigil binding is a future
+  capability). Unknown type or empty/over-2048-byte url → `invalid-avatar`. `null` clears.
+- **`bio`** (cap 280) and **`statusText`** (cap 64) are free-form. `statusText` is profile
+  text — **not** online presence and **not** the governance lifecycle `status`.
+
+**Canonical identity hardening.** New actor actions/messages now stamp the **registry's**
+current `name`/`kind`, not the values supplied on each poke. So after Rick sets his
+display name to "Richard", a later post that still carries `actor.name:"Rick"` is stamped
+**"Richard"**; **older messages keep their stamped "Rick".** `update-actor` (app-managed)
+and `update-actor-profile` (actor's own) are the explicit ways to change the name; history
+is never rewritten.
+
+**Authentication honesty.** Gall does not authenticate the local app desk or an Earth-user
+session. Noltbook scopes the data to `[desk, id]` and enforces the host grant; the trusted
+app (e.g. Skiff) is responsible for authenticating **Rick vs Alice** — Noltbook cannot
+independently prove which Earth user supplied the actor id.
+
+**Host-local / same-ship only.** No propagation; remote ships still see only the
+message-stamped name. No contacts/mute/block/presence/remote resolution and **no actor
+artifact access** in this phase. An all-empty profile row reads identically to no row.
+
+Reads (same-ship):
+- `/api/actors/<desk>/<id>` → the registry record `{ desk, id, name, kind, status, caps, …timestamps }` (404 if no such actor).
+- `/api/actors/<desk>/<id>/profile` →
+```json
+{ "host":"~zod", "desk":"skiff", "id":"rick", "displayName":"Rick", "kind":"user",
+  "lifecycleStatus":"active",
+  "avatar": null | { "type":"external", "url":"..." }, "bio": null|"...", "statusText": null|"..." }
+```
+`displayName`/`kind`/`lifecycleStatus` come from the registry; `avatar`/`bio`/`statusText`
+from `actor-profiles` (null when no profile row).
+
+### Actor Social — profile/avatar rendering & remote resolution (Phase G4)
+
+Actor identities now render visually in the **main Noltbook frontend** — avatar images on
+messages and pinned messages, and a dedicated **actor profile modal** (not the host's ship
+profile) — for **local and remote** actors. The host ship and app desk stay visibly attached;
+the first-letter glyph remains the fallback; **no Urbit sigils are ever drawn for actors.**
+
+**Public profile** is the only actor data that crosses ships / is cached. It is presentation
+only — `{ host, desk, id, displayName, kind, lifecycleStatus, avatar, bio, statusText }` —
+and **never** carries grants, capability sets, contacts, preferences, or private registry
+internals. `host` is **stamped** from `src.bowl`/`our.bowl` at the boundary, never trusted
+from the payload. Suspended/revoked actors are still returned so historical attributed
+messages remain inspectable.
+
+**Local vs remote resolution.** A local actor resolves directly from `actor-registry` +
+`actor-profiles`. A remote actor is fetched once per host via the **new** wire variants
+`%remote-actor-profile-request` / `%remote-actor-profile-response` and cached in
+`remote-actor-profiles` keyed `[host desk id]` with a `fetchedAt` stamp. Freshness window is
+**~m10 (10 min)**: a fresh cache answers immediately; a stale entry triggers a refresh and is
+**kept as stored fallback** (served by the read with `stale:true`) but is **not** re-echoed
+until the fresh response arrives.
+
+| action | data | result |
+|---|---|---|
+| `request-actor-profile` (API) | `{ requestId (required), host, desk, id }` | immediate `actor-profile-requested` / `invalid-ship` / `invalid-desk` / `actor-invalid`; then an async **`actor-profile-result`** on `/api/results` |
+
+The async result (`actor-profile-result`, also emitted on the FE `/notes` stream — one stable
+encoder for both) is:
+```json
+{ "requestId": 7, "host":"~wet", "desk":"skiff", "id":"alice",
+  "status": "ok" | "missing" | "unreachable" | "invalid-response",
+  "fetchedAt": 1718900000000 | null,
+  "profile": { …public profile… } | null }
+```
+- **ok** → profile present + cached. **missing** → host has no such actor (cache nothing).
+  **invalid-response** → the host returned a profile whose `desk`/`id` did **not** match the
+  request; it is **rejected and NOT cached** (a host may only assert profiles under its own
+  authenticated `src.bowl` namespace — a mismatched Alice payload is never normalized into a
+  Rick cache key). **unreachable** → the host poke **nacked** (host down / old peer that can't
+  parse the new variant). A reachable-but-silent host (e.g. one that blocks the requester) is
+  **not** turned into `unreachable` by the backend — that would need a durable pending-request
+  map, which does not exist; the **frontend/harness timeout** covers that case. We never
+  fabricate a confirmation. There is **no req-id pending map** server-side: correlation is the
+  caller's job, and the host can only answer under its own `src.bowl`.
+- **`fetchedAt`** (ms, or `null`) reflects backend cache age so the FE freshness is honest:
+  `null` for a local result, a new remote response (cached at *now*), or any negative result;
+  the **stored fetch time** for a fresh-cache hit.
+
+There is **also** a local frontend-internal action `request-actor-profile { host, desk, actorId,
+reqId }` (poked as `noltbook-action`) that the main UI uses to resolve unique actors it sees.
+**Frontend freshness:** a resolved profile is **fresh for 10 min** (skipped while fresh); after
+10 min a **refresh is requested while the stale data keeps displaying**; `missing`/
+`invalid-response` get a **5 min** negative cooldown and `unreachable` a **2 min** cooldown, so
+render cycles never re-poke a dead/missing host. In-flight requests are deduplicated, and the
+flow **never reloads the message timeline**. A local profile stays cached until an
+`actor-profile-updated` fact arrives. The **actor profile modal has an explicit RETRY** button
+that bypasses freshness + cooldown.
+
+**Security — delegated clicks:** actor avatars/names carry the identity in `data-*` attributes
+(`data-actor-profile`/`data-host`/`data-desk`/`data-id`/`data-name`/`data-kind`); a single
+**capture-phase** delegated listener reads `dataset` and calls `viewActorProfile`. **No
+actor-controlled value is ever interpolated into an inline JavaScript expression**, so quotes in
+an actor name can't break out into script. Applies to both normal and pinned actor messages;
+`stopPropagation` behavior is preserved.
+
+**`update-actor-profile`** additionally emits an **`actor-profile-updated`** fact on `/notes`
+(public profile only) so the main UI refreshes immediately. Profiles are **not** pushed to
+remote ships — they re-resolve through the cache/TTL.
+
+**Wire compatibility:** these are **new** remote variants (no existing ship-profile wire shape
+changed). An **old peer cannot answer** them, so all participating ships must run matching code
+before remote actor-profile testing; until then the fallback is the message-carried `name`/
+`kind` + initial glyph. No actor **DMs** are added (the modal has no DM button), and there are
+no sigils, pals, contacts, SEND, block, wallet, or plugin controls on an actor.
+
+Reads:
+- `/api/actors/<desk>/<id>/profile` — unchanged (same-ship actor-management tooling).
+- `/api/actor-profiles/<host>/<desk>/<id>` → the public profile JSON **+ `fetchedAt`/`stale`**.
+  Local host resolves the current local profile (`stale:false`, `fetchedAt:null`); a remote
+  host returns the **cached** profile (`stale` = older than ~m10); unknown/uncached → 404.
+
+### Actor Social — contact books (Phase F2)
+
+Each actor has its **own contact book** of **identity references** — a real ship or
+another actor. Requires `%attribute` + `%manage-own-contacts`.
+
+| action | data | result |
+|---|---|---|
+| `actor-add-contact` | top-level `app`+`actor` + `{ ref }` | `actor-contact-added` / `actor-invalid` / `invalid-ref` / `invalid-ship` / `rejected` (self) / `cap-missing` / governance codes |
+| `actor-remove-contact` | top-level `app`+`actor` + `{ ref }` | `actor-contact-removed` / `missing-target` / (same failures) |
+
+**`identity-ref`** (`ref`) is a tagged object — a **ship** or an **actor**:
+```json
+{ "kind":"ship",  "ship":"~wet" }
+{ "kind":"actor", "host":"~wet", "desk":"skiff", "id":"alice" }
+```
+
+- **Contacts are not pals** — no trust, Ames, membership, wallet, or plugin authority;
+  adding a contact grants nothing. The book is scoped to `[app.desk, actor.id]` and
+  **never touches the host's `contacts=(set @p)`** or `/api/contacts`.
+- **Validation:** a bad ship/host `@p` → `invalid-ship`; a bad desk-term, empty/over-128-byte
+  id, or malformed structure → `invalid-ref`. A `null`/non-object/unknown-kind `ref` parses
+  to `%invalid` (→ `invalid-ref`), never a crash.
+- **Self-contact:** an *actor* ref equal to your own `[our, app.desk, actor.id]` → `rejected`.
+  A *ship* ref to the host is allowed (a distinct real identity).
+- **Remote refs are stored unresolved** — a valid `[host, desk, id]` is saved immediately;
+  current name/avatar of a remote actor is **not** resolved (deferred). Reads return only
+  the stable tagged reference — no invented names/profile fields.
+- **Duplicate `actor-add-contact` is idempotent success** (set membership). **`actor-remove-contact`
+  of a non-member → `missing-target`**; removing the last entry **deletes the map row**.
+- **Atomic:** an invalid/missing-target request does **not** TOFU-register the actor or bump
+  last-seen — the candidate registry is committed only on success.
+- **Same-ship / cooperative.** Noltbook scopes storage and enforces the host grant, but Gall
+  cannot authenticate which Earth user supplied the actor id — **Skiff** must authenticate
+  Rick vs Alice. The book is durable app data, not a hard private vault against the host.
+- Suspend/revoke rejects writes but **retains** the contact data. **No** profile propagation,
+  mute, block, presence, wallet, artifact, or gossip access in this phase.
+
+Read: `/api/actors/<desk>/<id>/contacts` (404 if no such actor) →
+```json
+{ "host":"~zod", "desk":"noltbook-dev", "id":"rick",
+  "contacts": [ { "kind":"ship", "ship":"~wet" },
+                { "kind":"actor", "host":"~wet", "desk":"skiff", "id":"alice" } ] }
+```
+
+### Actor Social — identity mute & block preferences (Phase F3)
+
+Each actor has its **own stored-only identity mute/block book** consumed by the
+**plugin**. Requires `%attribute` + `%manage-own-preferences`. Every action carries a
+tagged `ref` (the same `identity-ref` shape as contacts).
+
+| action | data | result |
+|---|---|---|
+| `actor-block-identity` | `app`+`actor` + `{ ref }` | `actor-identity-blocked` / `invalid-ref` / `invalid-ship` / `rejected` (self) / `cap-missing` / governance |
+| `actor-unblock-identity` | `app`+`actor` + `{ ref }` | `actor-identity-unblocked` / `missing-target` (not blocked) / (same) |
+| `actor-mute-identity` | `app`+`actor` + `{ ref }` | `actor-identity-muted` / (same as block) |
+| `actor-unmute-identity` | `app`+`actor` + `{ ref }` | `actor-identity-unmuted` / `missing-target` (not muted) / (same) |
+
+**`actor-preferences`** stores two independent sets per `[app.desk, actor.id]`:
+```
+blocked : set of identity-ref   — hide that identity's content in the plugin
+muted   : set of identity-ref   — suppress that identity's notifications/attention
+```
+
+- **Identity mute vs identity block are independent.** Block = *hide content*;
+  mute = *suppress notifications* (content stays visible). Blocking never adds/removes
+  mute and vice versa — unblocking leaves any mute in place, and unmuting leaves any
+  block in place.
+- **Stored-only / plugin-applied.** Noltbook only **stores and authorizes** preferences;
+  it does **not** filter API reads or prevent posts in this phase. A blocked/muted target
+  stays free to post. The plugin (Skiff) owns rendering/filtering in v1.
+- **Never mutates host state** — `pal-blocked`, `blocked-by`, `contacts`, `note-muted`,
+  note members/admins, and host attention/read state are all untouched. Block/mute are
+  not pals, Ames controls, or moderator actions.
+- **Validation** mirrors contacts: bad ship/host `@p` → `invalid-ship`; bad desk-term,
+  empty/over-128-byte id, or malformed structure → `invalid-ref` (never a crash);
+  an *actor* ref equal to your own `[our, app.desk, actor.id]` → `rejected` (a *ship*
+  ref to the host is allowed). **Remote actor refs are stored unresolved** (no name/profile).
+- **Idempotent / missing-target:** duplicate block/mute is success; unblocking/unmuting a
+  ref that isn't present → `missing-target`. When both sets become empty the map row is
+  deleted.
+- **Atomic:** any failed action (governance, `invalid-ref`/`invalid-ship`, `rejected`,
+  `missing-target`) does **not** TOFU-register the actor or bump last-seen — the candidate
+  registry is committed only on success — and still emits a visible `/api/results` fact
+  when a `requestId` is supplied.
+- **Same-ship / cooperative.** Skiff must authenticate Rick vs Alice; Gall cannot. Suspend/revoke
+  rejects writes but **retains** preferences for reactivation. **No** profile propagation,
+  presence, wallet, artifact, pals, or gossip actor access in this phase.
+
+Read: `/api/actors/<desk>/<id>/preferences` (404 if no such actor) →
+```json
+{ "host":"~zod", "desk":"noltbook-dev", "id":"rick",
+  "blocked": [ { "kind":"ship", "ship":"~wet" },
+               { "kind":"actor", "host":"~wet", "desk":"skiff", "id":"alice" } ],
+  "muted":   [ { "kind":"ship", "ship":"~sampel-palnet" } ] }
+```
 
 ### Artifacts
 
@@ -383,15 +1161,24 @@ internal `/notes` update shapes so they stay stable across UI changes.
 | path | returns |
 |---|---|
 | `/api/notes` | `{ notes: [ { id, name, type, creator, visibility, userCount, lastPreview, app, active } ] }` |
-| `/api/notes/<id>` | `{ noteId, messages: [ { id, msgId, author, text, timestamp, edited, eid, replyToEid, via, actor } ], artifacts: [ { id, name, type, creator, noteId, eid, replyToEid, created, updated, versionCount, latestVersion, latestEditor, latestTimestamp, mime, kind, size, url, downloadUrl, via } ], app, pin, active }` |
+| `/api/notes/<id>` | `{ noteId, messages: [ { id, msgId, author, text, timestamp, edited, eid, replyToEid, via, actor } ], artifacts: [ { id, name, type, creator, noteId, eid, replyToEid, created, updated, versionCount, latestVersion, latestEditor, latestTimestamp, mime, kind, size, url, downloadUrl, via } ], app, pin, active, actorOwner }` |
 | `/api/artifacts/<id>` | `{ artifact: { …artifact fields…, via, versions: [ { version, content, editor, timestamp } ] } }` |
 | `/api/actor-grants` | `{ grants: [ { desk, enabled, caps, grantedBy, grantedAt, updatedAt, revokedAt } ] }` |
-| `/api/actors` | `{ actors: [ { desk, id, name, kind, status, createdAt, updatedAt, revokedAt, lastSeen } ] }` |
+| `/api/actors` | `{ actors: [ { desk, id, name, kind, status, createdAt, updatedAt, revokedAt, lastSeen, caps } ] }` (`caps`: `null` = inherit app grant, else array) |
 | `/api/actors/<desk>` | same as `/api/actors`, filtered to one desk |
+| `/api/actors/<desk>/<id>` | one actor's registry record (404 if absent) |
+| `/api/actors/<desk>/<id>/profile` | `{ host, desk, id, displayName, kind, lifecycleStatus, avatar, bio, statusText }` (same-ship management read) |
+| `/api/actor-profiles/<host>/<desk>/<id>` | public profile `+ { fetchedAt, stale }` (G4): local host = current profile (`stale:false`); remote host = cached (`stale` if >~m10); 404 if unknown/uncached |
+| `/api/actors/<desk>/<id>/contacts` | `{ host, desk, id, contacts: [ {kind:"ship",ship} \| {kind:"actor",host,desk,id} ] }` |
+| `/api/actors/<desk>/<id>/preferences` | `{ host, desk, id, blocked: [identity-ref], muted: [identity-ref] }` (stored-only; no filtering) |
+| `/api/actors/<desk>/<id>/notes` | `{ notes: [ { id, name, type, creator, visibility, writable, userCount, lastAuthor, lastPreview, actorOwner, owned, participant, activity, read, unread } ] }` (owned or participated, live notes only; no artifacts; `activity`/`read`/`unread` are G6A message-only actor read state; 404 if actor absent) |
+| `/api/actors/<desk>/<id>/notes/<noteId>` | `{ noteId, note (incl. activity/read/unread), messages: [ …with actor/via… ] }` (404 unless the actor owns or participates; no artifacts) |
+| `/api/actors/<desk>/<id>/dms` (G5A) | `{ dms: [ { noteId, actorDm, target, counterpart, createdAt, lastAuthor, lastPreview, owned, adopted, activity, read, unread } ] }` (valid live actor DMs the actor owns/adopted; no artifacts; 404 if actor absent) |
+| `/api/actors/<desk>/<id>/notifications` (G6B) | `{ host, desk, id, notifications: [ { kind, noteId, eid, msgId, author, actor, preview, timestamp } ] }` (directed reply notifications, newest-first; resolved live; reply-only; 404 if actor absent) |
 | `/api/profile/<ship>` | `{ ship, known, displayName, avatar, walletAddress, azimuthAddress, palStatus, isContact, isBlocked }` |
 | `/api/contacts` | `{ contacts: [ …profile fields… ] }` |
 | `/api/notes/<id>/members` | `{ noteId, members: [ …profile fields…, role, muted, removed ] }` |
-| `/api/notes/<id>/meta` | `{ id, name, type, creator, visibility, writable, parent, children, userCount, removedCount, iconUrl, headline, lastAuthor, lastPreview, hostStatus, activity, read, forkOrigin, forkVersion, forkOf, memberRev, app, pin, active, capabilities: {…} }` |
+| `/api/notes/<id>/meta` | `{ id, name, type, creator, visibility, writable, parent, children, userCount, removedCount, iconUrl, headline, lastAuthor, lastPreview, hostStatus, activity, read, forkOrigin, forkVersion, forkOf, memberRev, app, pin, active, capabilities: {…}, actorOwner }` |
 | `/api/notes/<id>/capabilities` | `{ noteId, …capability flags… }` |
 | `/api/fork-invites` | `{ forkInvites: [ { rootId, sourceName, sourceVersion, forker, fetching } ] }` |
 | `/api/calls` | `{ calls: [ <call> ] }` |
@@ -432,6 +1219,15 @@ The harness is laid out section-by-section; each maps to one part of the API:
   again. **Disable** the app → `FAIL [app-disabled]`. Past attributed messages stay
   attributed after revoke. Remember: desk grants are **cooperative**, not authenticated
   (Gall hides the calling agent) — governance/audit, not isolation.
+  - **Actor permissions (Phase C):** use the **app caps** checkboxes on the grant to set
+    the app ceiling, and the **actor permissions** checklist for the current Actor Identity
+    id — leave **Inherit app permissions** checked to inherit the grant, or uncheck it to
+    toggle `attribute` / `post-message` / `edit-own-message` / `delete-own-message`
+    independently, then **Save Actor Permissions** (no need to type capability names).
+    To test the ceiling: give Rick `edit-own-message` but uncheck it on the app grant →
+    Edit as Actor returns `cap-missing` ("app lacks %edit-own-message"). To test actor
+    narrowing: keep it on the grant but uncheck it for Rick → `cap-missing` ("actor lacks
+    %edit-own-message").
 - **Artifacts** — Create Artifact (code/app); Detail; Edit / Delete on the selected artifact.
 - **Pin** — in Read Recent, Pin a message or `%file`/`%app` artifact row (one pin per note); the pinned-item block shows kind/target/pinnedBy with Clear Pin. Verify: pin a message, pin a `%file`/`%app` artifact (`%code` has no Pin button), setting a new target **replaces** the pin, `clear-note-pin` clears it, a non-creator is `rejected`, and deleting the pinned target auto-clears the pin. Read Meta shows the `pin` line.
 - **Active** — *Active* card: Set Active (label/count/ttl; sends top-level `app:APP`) → `active-set`; Read Recent/Meta show the `active` line and the sidebar shows the same green in-progress style as calls. Verify: the compact sidebar badge shows the count only when present (the label is in the title), after `ttl` seconds the read shows `active:null` (expiry filter), Clear Active → `active-cleared`. A `set-note-active` without `app` returns `missing-app` (the harness always sends `APP`, so test that path via the debug console/docs); a non-creator returns `rejected`.

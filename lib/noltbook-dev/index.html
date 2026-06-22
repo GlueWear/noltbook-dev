@@ -93,14 +93,33 @@
   </div>
 
   <div class="card">
-    <h2>2.6 &middot; ACTOR CONTROL <span class="muted" style="font-size:.7rem">(host governance · Phase A)</span></h2>
-    <p class="hint">Host grants which local app desk may attribute actors, and each actor's lifecycle.
-    <strong>Cooperative, not authenticated:</strong> Gall does not expose the calling agent, so <code>desk</code> is app-supplied — this is revocation/audit, not isolation from a malicious local agent.</p>
+    <h2>2.6 &middot; ACTOR CONTROL <span class="muted" style="font-size:.7rem">(host governance · Phase A/C)</span></h2>
+    <p class="hint">Host grants which local app desk may attribute actors, the app's <strong>capabilities</strong>, and each actor's lifecycle.
+    The app grant is the <strong>ceiling</strong>; per-actor caps can only narrow within it (empty = inherit the grant).
+    <strong>Cooperative, not authenticated:</strong> Gall does not expose the calling agent, so <code>desk</code> is app-supplied — revocation/audit, not isolation from a malicious local agent.</p>
     <div class="row">
       <input id="grantDesk" value="noltbook-dev" size="14" placeholder="desk">
-      <label><input type="checkbox" id="grantManage"> %manage-actors</label>
       <button class="primary" onclick="setAppGrant(true)">Grant</button>
       <button onclick="setAppGrant(false)">Disable</button>
+    </div>
+    <div class="row" style="margin-top:.3rem;font-size:.72rem">
+      <span class="muted">app caps:</span>
+      <label><input type="checkbox" id="capAttribute" checked> attribute</label>
+      <label><input type="checkbox" id="capManage" checked> manage-actors</label>
+      <label><input type="checkbox" id="capPost" checked> post-message</label>
+      <label><input type="checkbox" id="capEdit" checked> edit-own-message</label>
+      <label><input type="checkbox" id="capDelete" checked> delete-own-message</label>
+      <label><input type="checkbox" id="capCreate" checked> create-note</label>
+      <label><input type="checkbox" id="capConfig" checked> configure-note</label>
+      <label><input type="checkbox" id="capDeleteNote" checked> delete-own-note</label>
+      <label><input type="checkbox" id="capMembers" checked> manage-members</label>
+      <label><input type="checkbox" id="capParticipate" checked> participate-note</label>
+      <label><input type="checkbox" id="capLeaveNote" checked> leave-note</label>
+      <label><input type="checkbox" id="capSendDm" checked> send-dm</label>
+      <label><input type="checkbox" id="capManageNotifs" checked> manage-own-notifications</label>
+      <label><input type="checkbox" id="capProfile" checked> update-own-profile</label>
+      <label><input type="checkbox" id="capContacts" checked> manage-own-contacts</label>
+      <label><input type="checkbox" id="capPreferences" checked> manage-own-preferences</label>
     </div>
     <div class="row" style="margin-top:.3rem">
       <span class="muted" style="font-size:.74rem">actor id from Actor Identity above:</span>
@@ -109,16 +128,167 @@
       <button onclick="setActorStatus('revoked')">Revoke</button>
       <button onclick="loadActorControl()">List Grants/Actors</button>
     </div>
+    <div class="row" style="margin-top:.3rem;font-size:.72rem">
+      <span class="muted">actor permissions for the Actor Identity id (requires app %manage-actors):</span>
+      <label><input type="checkbox" id="actorInherit" checked onchange="syncActorCapsDisabled()"> Inherit app permissions</label>
+    </div>
+    <div class="row" style="margin-top:.2rem;font-size:.72rem">
+      <label><input type="checkbox" id="actorCapAttribute" checked disabled> attribute</label>
+      <label><input type="checkbox" id="actorCapPost" checked disabled> post-message</label>
+      <label><input type="checkbox" id="actorCapEdit" checked disabled> edit-own-message</label>
+      <label><input type="checkbox" id="actorCapDelete" checked disabled> delete-own-message</label>
+      <label><input type="checkbox" id="actorCapCreate" checked disabled> create-note</label>
+      <label><input type="checkbox" id="actorCapConfig" checked disabled> configure-note</label>
+      <label><input type="checkbox" id="actorCapDeleteNote" checked disabled> delete-own-note</label>
+      <label><input type="checkbox" id="actorCapMembers" checked disabled> manage-members</label>
+      <label><input type="checkbox" id="actorCapParticipate" checked disabled> participate-note</label>
+      <label><input type="checkbox" id="actorCapLeaveNote" checked disabled> leave-note</label>
+      <label><input type="checkbox" id="actorCapSendDm" checked disabled> send-dm</label>
+      <label><input type="checkbox" id="actorCapManageNotifs" checked disabled> manage-own-notifications</label>
+      <label><input type="checkbox" id="actorCapProfile" checked disabled> update-own-profile</label>
+      <label><input type="checkbox" id="actorCapContacts" checked disabled> manage-own-contacts</label>
+      <label><input type="checkbox" id="actorCapPreferences" checked disabled> manage-own-preferences</label>
+      <button onclick="saveActorPerms()">Save Actor Permissions</button>
+    </div>
     <div id="actorControl" class="muted" style="font-size:.74rem;margin-top:.3rem"></div>
   </div>
 
   <div class="card">
+    <h2>2.7 &middot; ACTOR PROFILE <span class="muted" style="font-size:.7rem">(Phase F1 · requires %update-own-profile)</span></h2>
+    <p class="hint">Updates the profile for the current <b>Actor Identity</b> id (app:APP + actorObj()).
+    <code>displayName</code> is the canonical <code>actor-record.name</code> (used by new messages); avatar/bio/statusText are profile data.
+    Leave a field blank to keep it; use the clear buttons to send <code>null</code>. Avatar <code>%urbit</code> is not allowed.</p>
+    <div class="row">
+      <input id="apDisplayName" placeholder="display name (blank = keep)" size="22">
+      <button onclick="$('apDisplayName').value='';apClearName=true;setStatus('displayName will clear→id on update','ok')">Clear Name (→id)</button>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <select id="apAvatarType"><option value="external">external</option><option value="s3">s3</option><option value="ipfs">ipfs</option></select>
+      <input id="apAvatarUrl" placeholder="avatar URL (blank = keep)" size="30">
+      <button onclick="$('apAvatarUrl').value='';apClearAvatar=true;setStatus('avatar will clear on update','ok')">Clear Avatar</button>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <input id="apBio" placeholder="bio (blank = keep, cap 280)" size="40">
+      <button onclick="$('apBio').value='';apClearBio=true;setStatus('bio will clear on update','ok')">Clear Bio</button>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <input id="apStatus" placeholder="statusText (blank = keep, cap 64)" size="24">
+      <button onclick="$('apStatus').value='';apClearStatus=true;setStatus('statusText will clear on update','ok')">Clear Status</button>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <button class="primary" onclick="updateActorProfile()">Update Actor Profile</button>
+      <button onclick="readActorProfile()">Read Actor Profile</button>
+    </div>
+    <div id="actorProfile" class="muted" style="font-size:.74rem;margin-top:.3rem"></div>
+    <div class="row" style="margin-top:.5rem;border-top:1px solid var(--bd);padding-top:.4rem">
+      <span class="muted" style="font-size:.74rem">Phase G4 remote resolution (local host = this ship; remote = another ~ship):</span>
+    </div>
+    <div class="row" style="margin-top:.2rem">
+      <input id="apfpHost" placeholder="host ~ship" size="14" value="~zod">
+      <input id="apfpDesk" placeholder="desk" size="12" value="noltbook-dev">
+      <input id="apfpId" placeholder="actor id" size="10" value="rick">
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <button class="primary" onclick="requestActorProfileDev()">Request Actor Profile</button>
+      <button onclick="readPublicActorProfile()">Read Cached/Public Profile</button>
+    </div>
+    <div id="actorProfileRemote" class="muted" style="font-size:.74rem;margin-top:.3rem"></div>
+  </div>
+
+  <div class="card">
+    <h2>2.8 &middot; ACTOR CONTACTS <span class="muted" style="font-size:.7rem">(Phase F2 · requires %manage-own-contacts)</span></h2>
+    <p class="hint"><b>The current Actor Identity id's</b> own contact book (app:APP + actorObj()).
+    Contacts are tagged references to a <b>ship</b> or <b>another actor</b> — <b>not pals</b>, no trust/membership.
+    This is <b>separate</b> from the host Profile/Contacts/Pals card and never touches <code>/api/contacts</code>.</p>
+    <div class="row">
+      <label>kind
+        <select id="acKind" onchange="acSyncKind()">
+          <option value="ship">ship</option>
+          <option value="actor">actor</option>
+        </select>
+      </label>
+      <span id="acShipRow"><input id="acShip" placeholder="~ship" size="14" value="~wet"></span>
+      <span id="acActorRow" style="display:none">
+        <input id="acHost" placeholder="host ~ship" size="12" value="~wet">
+        <input id="acDesk" placeholder="desk" size="10" value="skiff">
+        <input id="acId" placeholder="actor id" size="10" value="alice">
+      </span>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <button class="primary" onclick="actorAddContact()">Add Contact</button>
+      <button onclick="actorRemoveContact()">Remove Contact</button>
+      <button onclick="readActorContacts()">Read Contacts</button>
+    </div>
+    <div id="actorContacts" class="muted" style="font-size:.74rem;margin-top:.3rem"></div>
+  </div>
+
+  <div class="card">
+    <h2>2.9 &middot; ACTOR PREFERENCES <span class="muted" style="font-size:.7rem">(Phase F3 · requires %manage-own-preferences)</span></h2>
+    <p class="hint"><b>The current Actor Identity id's</b> own <b>stored-only</b> mute/block book (app:APP + actorObj()).
+    <b>Block</b> = hide that identity's content in the plugin; <b>mute</b> = suppress its notifications; they are <b>independent</b>.
+    Stored only — Noltbook does <b>not</b> filter reads or stop posts. Never touches host <code>pal-blocked</code>/<code>contacts</code>/<code>note-muted</code>.
+    This is <b>separate</b> from the host social controls.</p>
+    <div class="row">
+      <label>kind
+        <select id="apfKind" onchange="apfSyncKind()">
+          <option value="ship">ship</option>
+          <option value="actor">actor</option>
+        </select>
+      </label>
+      <span id="apfShipRow"><input id="apfShip" placeholder="~ship" size="14" value="~wet"></span>
+      <span id="apfActorRow" style="display:none">
+        <input id="apfHost" placeholder="host ~ship" size="12" value="~wet">
+        <input id="apfDesk" placeholder="desk" size="10" value="skiff">
+        <input id="apfId" placeholder="actor id" size="10" value="alice">
+      </span>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <button class="primary" onclick="actorBlockIdentity()">Block</button>
+      <button onclick="actorUnblockIdentity()">Unblock</button>
+      <button onclick="actorMuteIdentity()">Mute Identity</button>
+      <button onclick="actorUnmuteIdentity()">Unmute Identity</button>
+      <button onclick="readActorPreferences()">Read Preferences</button>
+    </div>
+    <div id="actorPreferences" class="muted" style="font-size:.74rem;margin-top:.3rem"></div>
+  </div>
+
+  <div class="card">
+    <h2>2.95 &middot; HOST/USER ACTOR PREFERENCES <span class="muted" style="font-size:.7rem">(Phase B · real ship user, NOT the actor)</span></h2>
+    <p class="hint">The <b>real ship user's</b> notification preferences for ANY actor identity, keyed by the
+    full stable <b>[host, desk, id]</b> (local Rick on ~zod and remote James on ~wet use the same key).
+    <b>Mute</b> = suppress that actor's host green-unread + reply/@~host attention. <b>Block</b> = mute +
+    the frontend hides its message/pin content behind a session VIEW. Neither rejects/deletes the message,
+    suspends/revokes the actor, nor touches host <code>pal-blocked</code>/membership. Notifications are
+    <b>ON by default</b>. This is <b>NOT</b> the actor's own preferences (sec. 2.9), nor app grants, nor
+    actor status/caps. Targets need <b>not</b> exist locally (remote actors valid). Pokes <code>noltbook-api</code>.</p>
+    <div class="row">
+      <input id="uapHost" placeholder="host ~ship" size="12" value="~zod">
+      <input id="uapDesk" placeholder="desk" size="12" value="noltbook-dev">
+      <input id="uapId" placeholder="actor id" size="10" value="rick">
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <button class="primary" onclick="userMuteActor()">Mute</button>
+      <button onclick="userUnmuteActor()">Unmute</button>
+      <button onclick="userBlockActor()" style="border-color:#ff6b6b;color:#ff6b6b">Block</button>
+      <button onclick="userUnblockActor()">Unblock</button>
+      <button onclick="readUserActorPrefs()">Read User Actor Preferences</button>
+    </div>
+    <div id="userActorPrefs" class="muted" style="font-size:.74rem;margin-top:.3rem"></div>
+  </div>
+
+  <div class="card">
     <h2>3 &middot; POST TEXT MESSAGE</h2>
-    <p class="hint">poke <code>send-message {noteId,text}</code> into the selected note, then re-read.</p>
+    <p class="hint">poke <code>send-message {noteId,text}</code> into the selected note, then re-read.
+    <b>Send</b> always posts a <b>root</b> message (no <code>replyToEid</code>). <b>Reply to Selected
+    Message</b> posts a reply to the selected message's <code>eid</code> (G6B resolves by stable eid,
+    not legacy msgId) — attribute it to a <b>different Actor Identity</b> to create a directed reply
+    notification for the selected message's actor (sec.&nbsp;8c2).</p>
     <div class="row">
       <input id="msgText" placeholder="message text" size="40" value="hello from %noltbook-dev">
       <button class="primary" onclick="postMessage()">Send</button>
+      <button id="replyBtn" onclick="replyToSelectedMessage()">Reply to Selected Message</button>
     </div>
+    <div id="replyTarget" class="muted" style="font-size:.74rem;margin-top:.3rem">Reply target: none</div>
   </div>
 
   <div class="card">
@@ -205,13 +375,36 @@
       <button onclick="mod('make-admin')">make admin</button>
       <button onclick="mod('remove-admin')">remove admin</button>
     </div>
+    <div class="row" style="margin-top:.3rem;border-top:1px solid var(--border2);padding-top:.3rem">
+      <span class="muted" style="font-size:.74rem">As Actor (app:APP + Actor Identity; only on actor-owned notes):</span>
+    </div>
+    <div class="row">
+      <button class="primary" onclick="actorMod('actor-add-member')">Add Member</button>
+      <button onclick="actorMod('actor-remove-member')">Remove Member</button>
+      <button onclick="actorMod('actor-approve-join')">Approve Join</button>
+      <button onclick="actorMod('actor-deny-join')">Deny Join</button>
+      <button onclick="actorMod('actor-mute-member')">Mute Member</button>
+      <button onclick="actorMod('actor-unmute-member')">Unmute Member</button>
+    </div>
   </div>
 
   <div class="card">
     <h2>8 &middot; NOTE CONFIG (mutations)</h2>
     <p class="hint">Poke <code>set-note-config</code> on the <b>selected note</b>.
     Only filled fields change; leave a field blank to keep it. Routes through
-    Noltbook's rename / set-note-meta / set-headline handlers (creator-only).</p>
+    Noltbook's rename / set-note-meta / set-headline handlers (creator-only).
+    <b>Actor variants (Phase D):</b> <code>create-actor-note</code> /
+    <code>configure-actor-note</code> use top-level <code>app:APP</code> + the Actor
+    Identity; the note's creator stays the host ship while the actor is the durable owner.</p>
+    <div class="row" style="margin-bottom:.3rem">
+      <span class="muted" style="font-size:.74rem">create as actor:</span>
+      <input id="actorNoteName" placeholder="note name" size="20" value="Rick's Notebook">
+      <button class="primary" onclick="createActorNote()">Create Actor Note</button>
+    </div>
+    <div class="row" style="margin-bottom:.3rem">
+      <span class="muted" style="font-size:.74rem">delete as actor (only a note this exact actor owns):</span>
+      <button onclick="deleteActorNote()" style="border-color:#ff4444;color:#ff4444;font-weight:bold">Delete as Actor</button>
+    </div>
     <div class="row">
       <input id="cfgName" placeholder="new name (blank = keep)" size="22">
       <label>vis
@@ -234,7 +427,74 @@
       <input id="cfgHeadline" placeholder="headline (empty string clears)" size="30">
       <label><input type="checkbox" id="cfgHeadlineOn"> set headline</label>
       <button class="primary" onclick="setNoteConfig()">Set Selected Note Config</button>
+      <button onclick="configureAsActor()">Configure as Actor</button>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>8c &middot; ACTOR PARTICIPATION <span class="muted" style="font-size:.7rem">(Phase G2 · requires %participate-note)</span></h2>
+    <p class="hint">Durable actor access to a <b>regular</b> note (<code>%notebook</code>/<code>%group</code>).
+    The host <b>@p</b> stays the real <code>note.users</code> member; this only records
+    <code>[app.desk, actorId]</code> rows. An actor may post/edit/delete only in notes it
+    <b>owns</b> or <b>participates</b> in. <b>Join</b> uses the current Actor Identity; <b>Add/Remove
+    Participant</b> require the current actor to <b>own</b> the selected note and target another
+    same-desk actor id.</p>
+    <div class="row">
+      <button class="primary" onclick="actorJoinNote()">Join Selected Note as Current Actor</button>
+      <button onclick="actorLeaveNote()" style="border-color:#ff4444;color:#ff4444">Leave Selected Note as Actor</button>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <input id="apartTarget" placeholder="target actor id" size="14" value="alice">
+      <button onclick="actorAddParticipant()">Add Participant</button>
+      <button onclick="actorRemoveParticipant()">Remove Participant</button>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <button onclick="readActorNotes()">Read Actor Notes</button>
+      <button onclick="readActorNoteDetail()">Read Selected Note as Actor</button>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <span class="muted" style="font-size:.74rem">G6A read state (per-actor; never touches host unread):</span>
+      <button onclick="actorMarkNoteRead()">Mark Selected Read as Actor</button>
+    </div>
+    <div id="actorParticipation" class="muted" style="font-size:.74rem;margin-top:.3rem"></div>
+  </div>
+
+  <div class="card">
+    <h2>8c2 &middot; ACTOR NOTIFICATIONS <span class="muted" style="font-size:.7rem">(Phase G6B · reply-only · requires %manage-own-notifications)</span></h2>
+    <p class="hint">Directed reply notifications for the current <b>Actor Identity</b> (app:APP +
+    Actor Identity id). A reply to a message attributed to this actor creates a row here —
+    NOT host attention. <b>Message-only</b> (mentions/artifact replies deferred); a reply from
+    the same actor to itself is skipped; muted/blocked senders are filtered (the message still
+    posts). To test (both actors active with <b>attribute</b> + <b>post-message</b> +
+    <b>manage-own-notifications</b>, each owning/participating the note): post a root message as
+    <b>Rick</b> with <b>Send</b> (sec.&nbsp;3); click Rick's message row to select it; switch Actor
+    Identity to <b>Alice</b>; click <b>Reply to Selected Message</b>; switch back to <b>Rick</b> and
+    read here — the row identifies <b>Alice</b> as the replying actor. Live <code>actor-notifications-updated</code>
+    events arrive on <code>/api/results</code>; this read is the durable recovery surface.
+    <b>mark-read and clear are independent</b> — clearing never marks the note read.</p>
+    <div class="row">
+      <button onclick="readActorNotifs()">Read Actor Notifications</button>
+      <button onclick="actorClearAllNotifs()" style="border-color:#ff4444;color:#ff4444">Clear All</button>
+    </div>
+    <div id="actorNotifs" class="muted" style="font-size:.74rem;margin-top:.3rem"></div>
+  </div>
+
+  <div class="card">
+    <h2>8d &middot; ACTOR DM <span class="muted" style="font-size:.7rem">(Phase G5A · requires %send-dm)</span></h2>
+    <p class="hint">A private actor-to-ship direct conversation as a <b>secret two-ship %group</b>
+    note (NOT canonical <code>%dm</code>). Idempotent per <b>[current Actor Identity, target]</b>;
+    Rick→~wet and Alice→~wet get <b>different note IDs</b>. The host <b>@p</b> stays the real member.
+    Adopt lets ONE local actor claim an incoming actor DM (manual actor-to-actor). After
+    create/found the note is selected — use <b>Post Text Message</b> (sec.&nbsp;3) to chat.</p>
+    <div class="row">
+      <input id="admTarget" placeholder="target ~ship" size="16" value="~wet">
+      <button class="primary" onclick="findOrCreateActorDm()">Find/Create Actor DM</button>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <button onclick="adoptActorDm()">Adopt Selected Actor DM</button>
+      <button onclick="readActorDms()">Read Actor DMs</button>
+    </div>
+    <div id="actorDms" class="muted" style="font-size:.74rem;margin-top:.3rem"></div>
   </div>
 
   <div class="card">
@@ -449,6 +709,18 @@ function showResult(r){
   $('resultLog').prepend(row);
   // Phase 14/16: a successful find-or-create-dm / -gossip-note selects the note.
   if(r.requestId===pendingSelect){pendingSelect=null; if(ok&&r.noteId)selectNoteFromResult(r);}
+  // G6B: resolve an in-flight reply ONLY on its real %api-result. The result line/log
+  // above is the authoritative success/failure message — never overwritten here.
+  if(pendingReply&&r.requestId===pendingReply.requestId){
+    const pr=pendingReply; pendingReply=null; setReplyBtn(false);
+    if(ok){
+      // clear the reply target only if the user is still on the same note AND the
+      // selected target still matches (never clear a newer selection / new note).
+      if(selected===pr.noteId&&selectedEntry&&selectedEntry.type==='message'&&selectedEntry.eid===pr.eid){selectedEntry=null;}
+      readRecent();  // refresh; self-contained + error-safe (no await needed here)
+    }
+    // on FAIL: preserve selectedEntry + reply-target line; do not Read Recent.
+  }
 }
 function openResultStream(){
   resultStream=new EventSource(api.url,{withCredentials:true});
@@ -458,12 +730,17 @@ function openResultStream(){
     if(!(d&&d.response==='diff'&&d.json))return;
     if(d.json['api-result'])showResult(d.json['api-result']);
     else if(d.json['api-search-result'])showSearch(d.json['api-search-result']);
+    else if(d.json['actor-profile-result'])showActorProfileResult(d.json['actor-profile-result']);
+    else if(d.json['actor-notifications-updated'])showActorNotifsUpdated(d.json['actor-notifications-updated']);
   };
   resultStream.onerror=()=>{
     $('sub').className='status err';
     $('sub').textContent='result stream dropped — closed; reload to reconnect';
     try{resultStream.close()}catch(_){}
     resultStream=null;
+    // G6B: an in-flight reply can no longer be confirmed — release it (keep the target
+    // selected) so the user can retry once reconnected.
+    if(pendingReply){pendingReply=null;setReplyBtn(false);setStatus('result stream dropped — reply unconfirmed; reconnect and retry','err');}
   };
 }
 async function initResults(){
@@ -502,6 +779,16 @@ async function listNotes(){
     $('notes').innerHTML=notesTable();
     setStatus(lastNotes.length+' notes. Click a row to select.','ok');
   }catch(e){setStatus(e.message,'err')}
+}
+// silent notes-table refresh for read-after-write: refetch + repaint, preserving
+// the current selection/highlight (notesTable reads `selected`). Sets no status,
+// so the triggering mutation's result message stays visible. Leaves the table
+// untouched on a transient read error.
+async function refreshNotesTable(){
+  try{
+    lastNotes=await fetchNotes();
+    $('notes').innerHTML=notesTable();
+  }catch(e){}
 }
 function pick(id){
   if(id!==selected)selectedEntry=null;  // switching notes clears entry selection
@@ -544,16 +831,58 @@ function actorObj(){
 // add the actor field to a poke body when enabled; never mutates other actions.
 function addActor(body){const a=actorObj();if(a)body.actor=a;return body}
 
-// ---- Actor Control (Phase A): host governance pokes + registry reads. ----
+// ---- Actor Control (Phase A/C): host governance pokes + registry reads. ----
 async function setAppGrant(enabled){
   const desk=($('grantDesk').value||'').trim();
   if(!desk){setStatus('enter a desk','err');return}
-  const caps=['attribute']; if($('grantManage').checked)caps.push('manage-actors');
+  const caps=[];
+  if($('capAttribute').checked)caps.push('attribute');
+  if($('capManage').checked)caps.push('manage-actors');
+  if($('capPost').checked)caps.push('post-message');
+  if($('capEdit').checked)caps.push('edit-own-message');
+  if($('capDelete').checked)caps.push('delete-own-message');
+  if($('capCreate').checked)caps.push('create-note');
+  if($('capConfig').checked)caps.push('configure-note');
+  if($('capDeleteNote').checked)caps.push('delete-own-note');
+  if($('capMembers').checked)caps.push('manage-members');
+  if($('capParticipate').checked)caps.push('participate-note');
+  if($('capLeaveNote').checked)caps.push('leave-note');
+  if($('capSendDm').checked)caps.push('send-dm');
+  if($('capManageNotifs').checked)caps.push('manage-own-notifications');
+  if($('capProfile').checked)caps.push('update-own-profile');
+  if($('capContacts').checked)caps.push('manage-own-contacts');
+  if($('capPreferences').checked)caps.push('manage-own-preferences');
   setStatus('poke set-app-grant …');
   try{
     const ok=await api.poke('noltbook','noltbook-api',{action:'set-app-grant',requestId:nextReq(),data:{desk,enabled,caps}});
     if(!ok){setStatus('set-app-grant poke failed','err');return}
     await sleep(300); setStatus(enabled?'app granted.':'app disabled.','ok'); loadActorControl();
+  }catch(e){setStatus(e.message,'err')}
+}
+// Phase C: set or clear per-actor caps (update-actor; requires app %manage-actors).
+// 'set' sends a caps array (narrow within the grant); 'clear' sends caps:null (inherit).
+// the four wired actor capabilities (manage-actors is app-level, not shown here).
+const ACTOR_CAP_BOXES=[['actorCapAttribute','attribute'],['actorCapPost','post-message'],['actorCapEdit','edit-own-message'],['actorCapDelete','delete-own-message'],['actorCapCreate','create-note'],['actorCapConfig','configure-note'],['actorCapDeleteNote','delete-own-note'],['actorCapMembers','manage-members'],['actorCapParticipate','participate-note'],['actorCapLeaveNote','leave-note'],['actorCapSendDm','send-dm'],['actorCapManageNotifs','manage-own-notifications'],['actorCapProfile','update-own-profile'],['actorCapContacts','manage-own-contacts'],['actorCapPreferences','manage-own-preferences']];
+// inherit on => disable (and visually check) the per-cap boxes; off => editable.
+function syncActorCapsDisabled(){
+  const inherit=$('actorInherit').checked;
+  ACTOR_CAP_BOXES.forEach(([id])=>{$(id).disabled=inherit; if(inherit)$(id).checked=true;});
+}
+// Save: inherit => caps:null; otherwise caps:[checked boxes]. desk/id/name/kind as today.
+async function saveActorPerms(){
+  const desk=($('grantDesk').value||'').trim();
+  const id=($('actorId').value||'').trim();
+  const name=($('actorName').value||'').trim();
+  const kind=$('actorKind').value;
+  if(!desk||!id||!name){setStatus('need desk + actor id + name','err');return}
+  const data={desk,id,name,kind};
+  if($('actorInherit').checked){data.caps=null}
+  else{data.caps=ACTOR_CAP_BOXES.filter(([id])=>$(id).checked).map(([,cap])=>cap)}
+  setStatus('poke update-actor …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'update-actor',requestId:nextReq(),data});
+    if(!ok){setStatus('update-actor poke failed','err');return}
+    await sleep(300); setStatus('actor permissions saved.','ok'); loadActorControl();
   }catch(e){setStatus(e.message,'err')}
 }
 async function setActorStatus(status){
@@ -574,15 +903,208 @@ async function loadActorControl(){
     const a=await api.scry('noltbook','/api/actors');
     const grants=(g&&g.grants)||[];
     const actors=(a&&a.actors)||[];
+    // sync the actor-permission toggles to the actor matching grant desk + Actor id.
+    // caps:null (or no actor) => Inherit; explicit array => uncheck Inherit + populate.
+    const curDesk=($('grantDesk').value||'').trim();
+    const curId=($('actorId').value||'').trim();
+    const cur=actors.find(x=>x.desk===curDesk&&x.id===curId);
+    const caps=cur?cur.caps:null;
+    const inherit=(caps==null);
+    $('actorInherit').checked=inherit;
+    const capSet=new Set(caps||[]);
+    ACTOR_CAP_BOXES.forEach(([id,cap])=>{$(id).checked=inherit?true:capSet.has(cap)});
+    syncActorCapsDisabled();
     let h='<div><strong>grants</strong>: '+(grants.length
       ? grants.map(x=>esc(x.desk)+(x.enabled?'':' (disabled)')+' ['+(x.caps||[]).map(esc).join(',')+']').join(' · ')
       : 'none')+'</div>';
     h+='<div style="margin-top:.2rem"><strong>actors</strong>: '+(actors.length
-      ? actors.map(x=>esc('%'+x.desk+'/'+x.id)+' '+esc(x.name)+' ('+esc(x.kind)+') ['+esc(x.status)+']').join(' · ')
+      ? actors.map(x=>esc('%'+x.desk+'/'+x.id)+' '+esc(x.name)+' ('+esc(x.kind)+') ['+esc(x.status)+'] caps:'+(x.caps==null?'inherit':('{'+x.caps.map(esc).join(',')+'}'))).join(' · ')
       : 'none')+'</div>';
     $('actorControl').innerHTML=h;
     setStatus(grants.length+' grants, '+actors.length+' actors','ok');
   }catch(e){setStatus(e.message,'err');$('actorControl').textContent=String(e)}
+}
+// ---- Actor Social (Phase F1): actor profile. One-shot "clear" flags send JSON
+// null (clear); a non-empty input sends the value; an untouched blank input is
+// omitted (keep). Flags reset after each Update. ----
+let apClearName=false,apClearAvatar=false,apClearBio=false,apClearStatus=false;
+async function updateActorProfile(){
+  const data={};
+  if(apClearName){data.displayName=null;}else{const v=$('apDisplayName').value.trim(); if(v)data.displayName=v;}
+  if(apClearAvatar){data.avatar=null;}else{const u=$('apAvatarUrl').value.trim(); if(u)data.avatar={type:$('apAvatarType').value,url:u};}
+  if(apClearBio){data.bio=null;}else{const b=$('apBio').value.trim(); if(b)data.bio=b;}
+  if(apClearStatus){data.statusText=null;}else{const s=$('apStatus').value.trim(); if(s)data.statusText=s;}
+  apClearName=apClearAvatar=apClearBio=apClearStatus=false;
+  setStatus('poke update-actor-profile …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'update-actor-profile',requestId:nextReq(),app:APP,data}));
+    if(!ok){setStatus('update-actor-profile poke failed','err');return}
+    await sleep(400); setStatus('actor profile update sent.','ok'); readActorProfile();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function readActorProfile(){
+  const desk=APP.desk; const id=($('actorId').value||'').trim();
+  if(!id){setStatus('enter an actor id (Actor Identity)','err');return}
+  setStatus('scry /api/actors/'+desk+'/'+id+'/profile …');
+  try{
+    const res=await api.scry('noltbook','/api/actors/'+encodeURIComponent(desk)+'/'+encodeURIComponent(id)+'/profile');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    if(!res){$('actorProfile').textContent='no such actor (404)';setStatus('no such actor','err');return}
+    const av=res.avatar?(esc(res.avatar.type)+' '+esc(res.avatar.url)):'null';
+    $('actorProfile').innerHTML='<div><strong>'+esc(res.displayName||res.id)+'</strong> ('+esc(res.kind)+') ['+esc(res.lifecycleStatus)+'] · %'+esc(res.desk)+'/'+esc(res.id)+' on '+esc(res.host)+'</div>'
+      +'<div>avatar: '+av+'</div><div>bio: '+esc(res.bio==null?'null':res.bio)+'</div><div>statusText: '+esc(res.statusText==null?'null':res.statusText)+'</div>';
+    // sync the canonical name back into Actor Identity so later tests read clearly
+    if(res.displayName)$('actorName').value=res.displayName;
+    setStatus('profile ok · '+(res.displayName||res.id),'ok');
+  }catch(e){setStatus(e.message,'err');$('actorProfile').textContent=String(e)}
+}
+// ---- Actor Social (Phase G4): remote actor profile resolution ----
+// request-actor-profile: local host resolves now; fresh remote cache answers now; else
+// a remote request is sent. The async actor-profile-result arrives on /api/results.
+async function requestActorProfileDev(){
+  const host=($('apfpHost').value||'').trim(), desk=($('apfpDesk').value||'').trim(), id=($('apfpId').value||'').trim();
+  if(!host||!desk||!id){setStatus('enter host + desk + id','err');return}
+  setStatus('poke request-actor-profile …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'request-actor-profile',requestId:nextReq(),data:{host,desk,id}});
+    if(!ok){setStatus('request-actor-profile poke failed','err');return}
+    setStatus('request sent — the async actor-profile-result appears below + in the result log.','ok');
+  }catch(e){setStatus(e.message,'err')}
+}
+// scry the stable read: local host = current local profile; remote = cached (+stale).
+async function readPublicActorProfile(){
+  const host=($('apfpHost').value||'').trim(), desk=($('apfpDesk').value||'').trim(), id=($('apfpId').value||'').trim();
+  if(!host||!desk||!id){setStatus('enter host + desk + id','err');return}
+  setStatus('scry /api/actor-profiles/'+host+'/'+desk+'/'+id+' …');
+  try{
+    const res=await api.scry('noltbook','/api/actor-profiles/'+encodeURIComponent(host)+'/'+encodeURIComponent(desk)+'/'+encodeURIComponent(id));
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    if(!res){$('actorProfileRemote').textContent='404 — no local actor / uncached remote';setStatus('404 (uncached/unknown)','err');return}
+    const av=res.avatar?(esc(res.avatar.type)+' '+esc(res.avatar.url)):'null';
+    $('actorProfileRemote').innerHTML='<div><strong>'+esc(res.displayName||res.id)+'</strong> ('+esc(res.kind)+') ['+esc(res.lifecycleStatus)+'] · %'+esc(res.desk)+'/'+esc(res.id)+' on '+esc(res.host)+'</div>'
+      +'<div>avatar: '+av+' · bio: '+esc(res.bio==null?'null':res.bio)+' · now: '+esc(res.statusText==null?'null':res.statusText)+'</div>'
+      +'<div class="muted">stale: '+(res.stale?'yes':'no')+(res.fetchedAt?(' · fetchedAt '+new Date(res.fetchedAt).toLocaleString()):' · local (now)')+'</div>';
+    setStatus('public profile read'+(res.stale?' (STALE)':''),'ok');
+  }catch(e){setStatus(e.message,'err');$('actorProfileRemote').textContent=String(e)}
+}
+// async actor-profile-result from /api/results (Phase G4): render + log it.
+function showActorProfileResult(r){
+  const p=r.profile;
+  const fa=(typeof r.fetchedAt==='number')?(' fetchedAt='+new Date(r.fetchedAt).toLocaleTimeString()):'';
+  const line='#'+r.requestId+' actor-profile-result ['+r.status+']'+fa+' '+r.host+' %'+r.desk+'/'+r.id
+    +(p?(' · '+(p.displayName||'')+' ('+(p.kind||'')+'/'+(p.lifecycleStatus||'')+')'+(p.avatar?(' avatar='+p.avatar.type):'')):' · no profile');
+  const row=document.createElement('div');row.className=(r.status==='ok')?'ok':'err';row.textContent=line;
+  $('resultLog').prepend(row);
+  const el=$('actorProfileRemote');
+  if(el)el.innerHTML='<div><strong>'+esc(r.host)+' %'+esc(r.desk)+'/'+esc(r.id)+'</strong> — status '+esc(r.status)+(fa?' ('+esc(fa.trim())+')':'')+'</div>'
+    +(p?('<div>name '+esc(p.displayName||'')+' · '+esc(p.kind||'')+' · '+esc(p.lifecycleStatus||'')
+        +(p.avatar?(' · avatar '+esc(p.avatar.type)+' '+esc(p.avatar.url||'')):'')
+        +(p.bio?(' · bio: '+esc(p.bio)):'')+(p.statusText?(' · now: '+esc(p.statusText)):'')+'</div>'):'<div>(no profile — '+esc(r.status)+(r.status==='invalid-response'?': host returned a mismatched desk/id, not cached':'')+')</div>');
+}
+// ---- Actor Social (Phase F2): actor contact book. The ref is a tagged ship/actor
+// identity; this is the current Actor Identity id's OWN book. ----
+function acSyncKind(){
+  const actor=$('acKind').value==='actor';
+  $('acShipRow').style.display=actor?'none':'';
+  $('acActorRow').style.display=actor?'':'none';
+}
+function acRef(){
+  if($('acKind').value==='ship')return {kind:'ship',ship:($('acShip').value||'').trim()};
+  return {kind:'actor',host:($('acHost').value||'').trim(),desk:($('acDesk').value||'').trim(),id:($('acId').value||'').trim()};
+}
+async function _actorContact(action){
+  setStatus('poke '+action+' …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action,requestId:nextReq(),app:APP,data:{ref:acRef()}}));
+    if(!ok){setStatus(action+' poke failed','err');return}
+    await sleep(400); setStatus(action+' sent.','ok'); readActorContacts();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function actorAddContact(){return _actorContact('actor-add-contact')}
+async function actorRemoveContact(){return _actorContact('actor-remove-contact')}
+function _refText(r){return r.kind==='ship'?('ship '+esc(r.ship)):('actor %'+esc(r.desk)+'/'+esc(r.id)+' on '+esc(r.host))}
+async function readActorContacts(){
+  const desk=APP.desk; const id=($('actorId').value||'').trim();
+  if(!id){setStatus('enter an actor id (Actor Identity)','err');return}
+  setStatus('scry /api/actors/'+desk+'/'+id+'/contacts …');
+  try{
+    const res=await api.scry('noltbook','/api/actors/'+encodeURIComponent(desk)+'/'+encodeURIComponent(id)+'/contacts');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    if(!res){$('actorContacts').textContent='no such actor (404)';setStatus('no such actor','err');return}
+    const cs=res.contacts||[];
+    $('actorContacts').innerHTML='<div><strong>%'+esc(res.desk)+'/'+esc(res.id)+'</strong> on '+esc(res.host)+' — '+cs.length+' contact(s):</div>'
+      +(cs.length?'<div>'+cs.map(_refText).join(' · ')+'</div>':'<div>none</div>');
+    setStatus(cs.length+' contacts','ok');
+  }catch(e){setStatus(e.message,'err');$('actorContacts').textContent=String(e)}
+}
+
+// ---- Actor Social (Phase F3): stored-only mute/block. ref reuses the F2 tagged
+// ship/actor shape; note actions use the currently selected note id. Independent
+// sets — block never touches mute. Stored only; the plugin applies it. ----
+function apfSyncKind(){
+  const actor=$('apfKind').value==='actor';
+  $('apfShipRow').style.display=actor?'none':'';
+  $('apfActorRow').style.display=actor?'':'none';
+}
+function apfRef(){
+  if($('apfKind').value==='ship')return {kind:'ship',ship:($('apfShip').value||'').trim()};
+  return {kind:'actor',host:($('apfHost').value||'').trim(),desk:($('apfDesk').value||'').trim(),id:($('apfId').value||'').trim()};
+}
+async function _actorPrefIdentity(action){
+  setStatus('poke '+action+' …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action,requestId:nextReq(),app:APP,data:{ref:apfRef()}}));
+    if(!ok){setStatus(action+' poke failed','err');return}
+    await sleep(400); setStatus(action+' sent.','ok'); readActorPreferences();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function actorBlockIdentity(){return _actorPrefIdentity('actor-block-identity')}
+async function actorUnblockIdentity(){return _actorPrefIdentity('actor-unblock-identity')}
+async function actorMuteIdentity(){return _actorPrefIdentity('actor-mute-identity')}
+async function actorUnmuteIdentity(){return _actorPrefIdentity('actor-unmute-identity')}
+async function readActorPreferences(){
+  const desk=APP.desk; const id=($('actorId').value||'').trim();
+  if(!id){setStatus('enter an actor id (Actor Identity)','err');return}
+  setStatus('scry /api/actors/'+desk+'/'+id+'/preferences …');
+  try{
+    const res=await api.scry('noltbook','/api/actors/'+encodeURIComponent(desk)+'/'+encodeURIComponent(id)+'/preferences');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    if(!res){$('actorPreferences').textContent='no such actor (404)';setStatus('no such actor','err');return}
+    const b=res.blocked||[], m=res.muted||[];
+    $('actorPreferences').innerHTML=
+      '<div><strong>%'+esc(res.desk)+'/'+esc(res.id)+'</strong> on '+esc(res.host)+'</div>'
+      +'<div><strong>blocked</strong> ('+b.length+'): '+(b.length?b.map(_refText).join(' · '):'none')+'</div>'
+      +'<div><strong>muted</strong> ('+m.length+'): '+(m.length?m.map(_refText).join(' · '):'none')+'</div>';
+    setStatus(b.length+' blocked · '+m.length+' muted','ok');
+  }catch(e){setStatus(e.message,'err');$('actorPreferences').textContent=String(e)}
+}
+// ---- Phase B: REAL ship-user actor mute/block by full [host,desk,id] (NOT actor-owned). ----
+async function _userActorPref(action){
+  const host=($('uapHost').value||'').trim(), desk=($('uapDesk').value||'').trim(), id=($('uapId').value||'').trim();
+  if(!host||!desk||!id){setStatus('enter host, desk, and actor id','err');return}
+  setStatus('poke '+action+' …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action,requestId:nextReq(),data:{host,desk,id}});
+    if(!ok){setStatus(action+' poke failed','err');return}
+    await sleep(400); setStatus(action+' sent.','ok'); readUserActorPrefs();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function userMuteActor(){return _userActorPref('mute-actor')}
+async function userUnmuteActor(){return _userActorPref('unmute-actor')}
+async function userBlockActor(){return _userActorPref('block-actor')}
+async function userUnblockActor(){return _userActorPref('unblock-actor')}
+function _uref(r){return esc(r.host)+'/%'+esc(r.desk)+'/'+esc(r.id)}
+async function readUserActorPrefs(){
+  setStatus('scry /api/user/actor-preferences …');
+  try{
+    const res=await api.scry('noltbook','/api/user/actor-preferences');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    const m=(res&&res.muted)||[], b=(res&&res.blocked)||[];
+    $('userActorPrefs').innerHTML=
+      '<div><strong>muted</strong> ('+m.length+'): '+(m.length?m.map(_uref).join(' · '):'none')+'</div>'
+      +'<div><strong>blocked</strong> ('+b.length+'): '+(b.length?b.map(_uref).join(' · '):'none')+'</div>';
+    setStatus(m.length+' muted · '+b.length+' blocked','ok');
+  }catch(e){setStatus(e.message,'err');$('userActorPrefs').textContent=String(e)}
 }
 
 async function postMessage(){
@@ -597,6 +1119,40 @@ async function postMessage(){
     setStatus('sent.','ok');
     readRecent();
   }catch(e){setStatus(e.message,'err')}
+}
+// G6B: reply to the selected MESSAGE by its stable eid (never legacy msgId). The
+// normal Send button is unaffected — only this explicit click sends replyToEid. The
+// reply is NOT treated as successful until the matching %api-result arrives on
+// /api/results (poke ok only confirms delivery, not actor-not-participant/cap-missing).
+let pendingReply=null;  // {requestId, noteId, eid} of an in-flight reply awaiting %api-result
+function setReplyBtn(pending){
+  const b=$('replyBtn'); if(!b)return;
+  b.disabled=pending; b.textContent=pending?'Waiting…':'Reply to Selected Message';
+}
+async function replyToSelectedMessage(){
+  if(pendingReply){setStatus('reply already pending','err');return}
+  if(!selected){setStatus('select/create a note first','err');return}
+  const text=$('msgText').value;
+  if(!text){setStatus('enter message text','err');return}
+  if(!(selectedEntry&&selectedEntry.type==='message')){setStatus('select a message row to reply to first','err');return}
+  const m=lastMsgs.find(msgIsSel);
+  if(!m){setStatus('selected message not in the current list — Read Recent and reselect','err');return}
+  if(!m.eid){setStatus('selected message has no eid — cannot reply (legacy/system message)','err');return}
+  // a reply can only be CONFIRMED via the live /api/results stream; block without it.
+  if(!resultStream){setStatus('connect the result stream first (sec. 0) — a reply cannot be confirmed without it','err');return}
+  const rid=nextReq();
+  pendingReply={requestId:rid,noteId:selected,eid:m.eid};
+  setReplyBtn(true);
+  setStatus('poke post-message (reply) …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'post-message',requestId:rid,app:APP,data:{noteId:selected,text,replyToEid:m.eid}}));
+    if(!ok){pendingReply=null;setReplyBtn(false);setStatus('reply post-message poke failed','err');return}
+    // delivered, NOT confirmed — keep the target selected; showResult resolves it.
+    // RACE: the matching result may have already arrived via the EventSource while we
+    // awaited the poke. Only claim "waiting" if THIS request is still pending; otherwise
+    // showResult() already finished and is the authority — do not touch state/status.
+    if(pendingReply&&pendingReply.requestId===rid){setStatus('reply submitted; waiting for result …');}
+  }catch(e){pendingReply=null;setReplyBtn(false);setStatus(e.message,'err')}
 }
 
 // client-side PREVIEW only — the actual ref string is built server-side by the
@@ -622,6 +1178,8 @@ $('recent').addEventListener('click',ev=>{
     const act=btn.dataset.act;
     if(act==='edit')startEdit(+btn.dataset.i);
     else if(act==='delete')deleteMessage(+btn.dataset.i);
+    else if(act==='actor-edit')startActorEdit(+btn.dataset.i);
+    else if(act==='actor-delete')actorDelete(+btn.dataset.i);
     else if(act==='detail')readArtifact(btn.dataset.artId);
     else if(act==='pin')doSetPin(btn.dataset.target,btn.dataset.kind);
     else if(act==='clear-pin')doClearPin();
@@ -755,6 +1313,35 @@ async function deleteMessage(i){
     await sleep(400); setStatus('delete sent.','ok'); readRecent();
   }catch(e){setStatus(e.message,'err')}
 }
+// Actor Tools (Phase B): edit/delete as the actor. Sends top-level app:APP +
+// actorObj() (via addActor). If "Send actor" is off, no actor field is sent and
+// the backend rejects with actor-invalid (the gate requires app + actor).
+function startActorEdit(i){
+  const m=lastMsgs[i]; if(!m)return;
+  const text=prompt('Edit (as actor) message text:', m.text);
+  if(text==null)return;
+  doActorEdit(m,text);
+}
+async function doActorEdit(m,text){
+  setStatus('poke edit-actor-message …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',
+      addActor({action:'edit-actor-message',requestId:nextReq(),app:APP,data:Object.assign({noteId:selected,text},msgRef(m))}));
+    if(!ok){setStatus('edit-actor-message poke failed','err');return}
+    await sleep(400); setStatus('actor edit sent.','ok'); readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function actorDelete(i){
+  const m=lastMsgs[i]; if(!m)return;
+  if(!confirm('Delete this message as actor?'))return;
+  setStatus('poke delete-actor-message …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',
+      addActor({action:'delete-actor-message',requestId:nextReq(),app:APP,data:Object.assign({noteId:selected},msgRef(m))}));
+    if(!ok){setStatus('delete-actor-message poke failed','err');return}
+    await sleep(400); setStatus('actor delete sent.','ok'); readRecent();
+  }catch(e){setStatus(e.message,'err')}
+}
 function viaText(v){return v?('via '+v.desk+(v.title?(' ('+v.title+')'):'')+' on '+v.ship):''}
 // actor identity readout: "actor Rick (user) via %noltbook-dev on ~zod".
 function actorText(a){return a?('actor '+a.name+' ('+a.kind+') via %'+a.desk+' on '+a.host):''}
@@ -786,6 +1373,8 @@ function paintRecent(){
       +'<div class="row" style="margin:.2rem 0 0">'
       +'<button data-act="edit" data-i="'+i+'">Edit</button>'
       +'<button data-act="delete" data-i="'+i+'">Delete</button>'
+      +'<button data-act="actor-edit" data-i="'+i+'">Edit as Actor</button>'
+      +'<button data-act="actor-delete" data-i="'+i+'">Delete as Actor</button>'
       +pinBtnRow(m.eid,'message')+'</div></div>';
   });
   if(lastArts.length){
@@ -802,6 +1391,18 @@ function paintRecent(){
   }
   $('recent').innerHTML=h;
   renderEntry();
+  renderReplyTarget();
+}
+// Section 3 reply-target line — reflects the currently selected MESSAGE (the reply
+// destination for "Reply to Selected Message"). "none" unless a live message is
+// selected. Repainted from paintRecent, so it tracks selection / clear / note switch /
+// Read Recent replacing the selected message / a completed reply.
+function renderReplyTarget(){
+  const el=$('replyTarget'); if(!el)return;
+  const m=(selectedEntry&&selectedEntry.type==='message')?lastMsgs.find(msgIsSel):null;
+  if(!m){el.textContent='Reply target: none';return}
+  const who=m.actor?(m.actor.name+' (%'+m.actor.desk+')'):m.author;
+  el.textContent='Reply target: '+who+' · "'+(m.text||'').slice(0,40)+'" · eid '+(m.eid||'(none)');
 }
 function renderEntry(){
   const e=$('entry');
@@ -898,6 +1499,11 @@ async function readMeta(){
           +' via %'+esc(res.active.desk)
           +(res.active.expiresAt?(' · expires '+new Date(res.active.expiresAt).toLocaleTimeString()):''))
         :'none')+'</div>'
+      +'<div class="muted" style="font-size:.72rem">actorOwner: '+(res.actorOwner
+        ?(esc((res.actorOwner.name||res.actorOwner.id))+' ('+esc(res.actorOwner.kind||'?')+')'
+          +' · %'+esc(res.actorOwner.desk)+'/'+esc(res.actorOwner.id)+' on '+esc(res.actorOwner.host)
+          +' ['+esc(res.actorOwner.status||'?')+']')
+        :'none')+'</div>'
       +'<div class="muted" style="font-size:.72rem">'+esc(capLine(c))+'</div></div>';
     setStatus('meta ok · '+(res.name||res.id),'ok');
   }catch(e){setStatus('meta: '+e.message+' (note exists?)','err');$('debug').textContent=String(e)}
@@ -929,6 +1535,23 @@ async function mod(action){
     setStatus(action+' sent.','ok');
     // refresh members + capabilities so the effect (or lack of) is visible
     readMembers();
+  }catch(e){setStatus(e.message,'err')}
+}
+// Actor Member Management (Phase E): same target-ship input, but sent as the actor
+// (top-level app:APP + actorObj()). Only works on notes this actor owns. Refreshes
+// members + metadata after, preserving selection.
+async function actorMod(action){
+  if(!selected){setStatus('select a note first','err');return}
+  const ship=($('modShip').value||'').trim();
+  if(!ship){setStatus('enter a target ~ship','err');return}
+  setStatus('poke '+action+' '+ship+' …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action,requestId:nextReq(),app:APP,data:{noteId:selected,ship}}));
+    if(!ok){setStatus(action+' poke failed','err');return}
+    await sleep(400);
+    setStatus(action+' sent.','ok');
+    readMembers();
+    readMeta();  // note type may flip notebook->group and actorOwner is shown here
   }catch(e){setStatus(e.message,'err')}
 }
 // ---- Phase 12A: artifact creation (code/app) ----
@@ -1151,8 +1774,252 @@ async function setNoteConfig(){
     if(!ok){setStatus('set-note-config poke failed','err');return}
     await sleep(400);
     setStatus('config sent.','ok');
+    await refreshNotesTable();  // reflect a rename in the table without losing selection
     readMeta();  // re-read so name/visibility/writable/headline changes are visible
   }catch(e){setStatus(e.message,'err')}
+}
+// ---- Actor Notes (Phase D): actor-owned note create/configure ----
+// create-actor-note: app:APP + Actor Identity + a name. On the result fact
+// (requires the result stream) the returned note is selected + meta read.
+async function createActorNote(){
+  const name=($('actorNoteName').value||'').trim();
+  if(!name){setStatus('enter a note name','err');return}
+  const body=addActor({action:'create-actor-note',requestId:nextReq(),app:APP,data:{name}});
+  pendingSelect=body.requestId;  // showResult selects + reads meta on actor-note-created
+  setStatus('poke create-actor-note …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',body);
+    if(!ok){setStatus('create-actor-note poke failed','err');pendingSelect=null;return}
+    setStatus('actor note request sent — awaiting result (connect stream to auto-select) …','ok');
+  }catch(e){setStatus(e.message,'err');pendingSelect=null}
+}
+// configure-actor-note: same field inputs as set-note-config, but actor-scoped.
+async function configureAsActor(){
+  if(!selected){setStatus('select a note first','err');return}
+  const data={noteId:selected};
+  const name=$('cfgName').value.trim();    if(name) data.name=name;
+  const vis=$('cfgVis').value;             if(vis) data.visibility=vis;
+  const wr=$('cfgWritable').value;         if(wr!=='') data.writable=(wr==='true');
+  if($('cfgHeadlineOn').checked) data.headline=$('cfgHeadline').value;
+  setStatus('poke configure-actor-note …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'configure-actor-note',requestId:nextReq(),app:APP,data}));
+    if(!ok){setStatus('configure-actor-note poke failed','err');return}
+    await sleep(400); setStatus('actor config sent.','ok');
+    await refreshNotesTable();  // reflect a rename in the table without losing selection
+    readMeta();
+  }catch(e){setStatus(e.message,'err')}
+}
+// delete-actor-note (Phase G1): delete a note this EXACT actor owns. Destructive —
+// requires a browser confirm naming the selected note. On success the note vanishes,
+// so we re-list and, if it's gone, clear the selection + recent/meta/member panels.
+// The result log (stream) is preserved and shows the honest backend code on failure.
+async function deleteActorNote(){
+  if(!selected){setStatus('select a note first','err');return}
+  const target=selected;
+  const ent=(lastNotes||[]).find(n=>n.id===target);
+  const nm=ent?(ent.name||ent.id):target;
+  if(!confirm('Delete note "'+nm+'"\n('+target+')\nas the current Actor Identity? This cannot be undone.')){
+    setStatus('delete cancelled','ok');return;
+  }
+  setStatus('poke delete-actor-note …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'delete-actor-note',requestId:nextReq(),app:APP,data:{noteId:target}}));
+    if(!ok){setStatus('delete-actor-note poke failed','err');return}
+    await sleep(450);
+    await listNotes();  // refetch lastNotes
+    const gone=!(lastNotes||[]).some(n=>n.id===target);
+    if(gone){
+      if(selected===target){selected=null;$('sel').textContent='none';selectedEntry=null}
+      $('recent').innerHTML='';$('meta').innerHTML='';$('people').innerHTML='';
+      $('notes').innerHTML=notesTable();
+      setStatus('actor note deleted.','ok');
+    }else{
+      setStatus('note still present — see result log for the backend code','err');
+    }
+  }catch(e){setStatus(e.message,'err')}
+}
+// ---- Actor Notes (Phase G2): durable actor participation. Join/add/remove only
+// manage [app.desk, actorId] rows; the host @p stays the real note.users member.
+// Reads are actor-scoped (owned or participant) and omit all artifact data. ----
+async function _actorPart(action,extra){
+  if(!selected){setStatus('select a note first','err');return}
+  setStatus('poke '+action+' …');
+  try{
+    const data=Object.assign({noteId:selected},extra||{});
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action,requestId:nextReq(),app:APP,data}));
+    if(!ok){setStatus(action+' poke failed','err');return}
+    await sleep(400); setStatus(action+' sent.','ok'); readActorNotes();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function actorJoinNote(){return _actorPart('actor-join-note')}
+async function actorAddParticipant(){return _actorPart('actor-add-participant',{targetId:($('apartTarget').value||'').trim()})}
+async function actorRemoveParticipant(){return _actorPart('actor-remove-participant',{targetId:($('apartTarget').value||'').trim()})}
+// actor-leave-note (Phase G3): the CURRENT actor drops only its own participation row.
+// The host still holds the note, so we KEEP the host-wide selection + ordinary note
+// list and only refresh the actor-scoped panel. Confirms naming the note + actor.
+async function actorLeaveNote(){
+  if(!selected){setStatus('select a note first','err');return}
+  const id=($('actorId').value||'').trim();
+  if(!id){setStatus('enter an actor id (Actor Identity)','err');return}
+  const ent=(lastNotes||[]).find(n=>n.id===selected);
+  const nm=ent?(ent.name||ent.id):selected;
+  if(!confirm('Leave note "'+nm+'"\n('+selected+')\nas actor %'+APP.desk+'/'+id+'?\n\nThe host ship stays in the note; only this actor’s access is removed.')){
+    setStatus('leave cancelled','ok');return;
+  }
+  setStatus('poke actor-leave-note …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'actor-leave-note',requestId:nextReq(),app:APP,data:{noteId:selected}}));
+    if(!ok){setStatus('actor-leave-note poke failed','err');return}
+    await sleep(400); setStatus('actor-leave-note sent.','ok');
+    readActorNotes();  // refresh actor-scoped panel; host selection + note list preserved
+  }catch(e){setStatus(e.message,'err')}
+}
+// G6A: actor-scoped read state (message-only). null timestamps render as '—'.
+function _ts(ms){return (typeof ms==='number')?new Date(ms).toLocaleTimeString():'—'}
+function _readState(n){
+  return ' · <b style="color:'+(n.unread?'#ff4444':'#65a9e8')+'">'+(n.unread?'UNREAD':'read')+'</b>'
+    +' (activity '+_ts(n.activity)+' / read '+_ts(n.read)+')';
+}
+// owner/participant flags explain WHY each note is visible to this actor.
+function _actorNoteLine(n){
+  const flags=[n.owned?'owned':null,n.participant?'participant':null].filter(Boolean).join('+')||'(none)';
+  const owner=n.actorOwner?('%'+esc(n.actorOwner.desk)+'/'+esc(n.actorOwner.id)):'—';
+  return '<div><b>'+esc(n.name)+'</b> <span class="muted">'+esc(n.id)+'</span> · '+esc(n.type)
+    +' · '+flags+' · owner '+owner+' · users '+(n.userCount||0)+_readState(n)+'</div>';
+}
+// actor-mark-note-read: explicit only — reading the route never marks read.
+async function actorMarkNoteRead(){
+  if(!selected){setStatus('select a note first','err');return}
+  setStatus('poke actor-mark-note-read …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'actor-mark-note-read',requestId:nextReq(),app:APP,data:{noteId:selected}}));
+    if(!ok){setStatus('actor-mark-note-read poke failed','err');return}
+    await sleep(400); setStatus('actor-mark-note-read sent.','ok'); readActorNotes();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function readActorNotes(){
+  const desk=APP.desk; const id=($('actorId').value||'').trim();
+  if(!id){setStatus('enter an actor id (Actor Identity)','err');return}
+  setStatus('scry /api/actors/'+desk+'/'+id+'/notes …');
+  try{
+    const res=await api.scry('noltbook','/api/actors/'+encodeURIComponent(desk)+'/'+encodeURIComponent(id)+'/notes');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    if(!res){$('actorParticipation').textContent='no such actor (404)';setStatus('no such actor','err');return}
+    const ns=res.notes||[];
+    $('actorParticipation').innerHTML='<div><strong>%'+esc(desk)+'/'+esc(id)+'</strong> — '+ns.length+' actor note(s):</div>'
+      +(ns.length?ns.map(_actorNoteLine).join(''):'<div>none</div>');
+    setStatus(ns.length+' actor notes','ok');
+  }catch(e){setStatus(e.message,'err');$('actorParticipation').textContent=String(e)}
+}
+async function readActorNoteDetail(){
+  if(!selected){setStatus('select a note first','err');return}
+  const desk=APP.desk; const id=($('actorId').value||'').trim();
+  if(!id){setStatus('enter an actor id (Actor Identity)','err');return}
+  setStatus('scry /api/actors/'+desk+'/'+id+'/notes/'+selected+' …');
+  try{
+    const res=await api.scry('noltbook','/api/actors/'+encodeURIComponent(desk)+'/'+encodeURIComponent(id)+'/notes/'+encodeURIComponent(selected));
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    if(!res){$('actorParticipation').innerHTML='<div class="muted">actor-not-participant or missing (404)</div>';setStatus('no access / 404','err');return}
+    const msgs=res.messages||[];
+    $('actorParticipation').innerHTML=_actorNoteLine(res.note||{})
+      +'<div class="muted" style="margin-top:.2rem">'+msgs.length+' message(s) — actor/via attribution, no artifacts:</div>'
+      +msgs.map(m=>'<div>'+esc(m.author)+(m.actor?(' ['+esc(m.actor.name)+' %'+esc(m.actor.desk)+']'):'')+': '+esc((m.text||'').slice(0,120))+'</div>').join('');
+    setStatus('actor note detail · '+msgs.length+' msgs','ok');
+  }catch(e){setStatus(e.message,'err');$('actorParticipation').textContent=String(e)}
+}
+// ---- Actor Notifications (Phase G6B): reply-only directed notifications ----
+// one resolved reply row: sender identity (actor or ship), preview, time, Clear button.
+function _notifLine(n){
+  const sender=n.actor?('['+esc(n.actor.name)+' %'+esc(n.actor.desk)+'/'+esc(n.actor.id)+']'):esc(n.author);
+  return '<div><b>'+esc((n.kind||'reply'))+'</b> in <span class="muted">'+esc(n.noteId)+'</span>'
+    +' · from '+sender+' · '+_ts(n.timestamp)
+    +' · <i>'+esc((n.preview||'').slice(0,120))+'</i>'
+    +' <button onclick="actorClearNotif(\''+esc(n.eid)+'\',\''+esc(n.noteId)+'\')">Clear</button></div>';
+}
+async function readActorNotifs(){
+  const desk=APP.desk; const id=($('actorId').value||'').trim();
+  if(!id){setStatus('enter an actor id (Actor Identity)','err');return}
+  setStatus('scry /api/actors/'+desk+'/'+id+'/notifications …');
+  try{
+    const res=await api.scry('noltbook','/api/actors/'+encodeURIComponent(desk)+'/'+encodeURIComponent(id)+'/notifications');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    if(!res){$('actorNotifs').textContent='no such actor (404)';setStatus('no such actor','err');return}
+    const ns=res.notifications||[];
+    $('actorNotifs').innerHTML='<div><strong>%'+esc(desk)+'/'+esc(id)+'</strong> — '+ns.length+' notification(s) (newest-first):</div>'
+      +(ns.length?ns.map(_notifLine).join(''):'<div>none</div>');
+    setStatus(ns.length+' actor notifications','ok');
+  }catch(e){setStatus(e.message,'err');$('actorNotifs').textContent=String(e)}
+}
+// clearing is independent of read state — it never marks the note read.
+async function actorClearNotif(eid,noteId){
+  setStatus('poke actor-clear-notification …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'actor-clear-notification',requestId:nextReq(),app:APP,data:{noteId,eid}}));
+    if(!ok){setStatus('actor-clear-notification poke failed','err');return}
+    await sleep(400); setStatus('notification cleared.','ok'); readActorNotifs();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function actorClearAllNotifs(){
+  setStatus('poke actor-clear-notifications …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'actor-clear-notifications',requestId:nextReq(),app:APP,data:{}}));
+    if(!ok){setStatus('actor-clear-notifications poke failed','err');return}
+    await sleep(400); setStatus('all notifications cleared.','ok'); readActorNotifs();
+  }catch(e){setStatus(e.message,'err')}
+}
+// live %actor-notifications-updated from /api/results. full=true => authoritative
+// remaining list for [desk,id]; full=false => delta (one new reply). We only re-render
+// when the event targets the Actor Identity currently shown.
+function showActorNotifsUpdated(u){
+  const id=($('actorId').value||'').trim();
+  const row=document.createElement('div');row.className='ok';
+  row.textContent='actor-notifications-updated %'+u.desk+'/'+u.id+' full='+u.full+' ('+((u.notifications||[]).length)+')';
+  $('resultLog').prepend(row);
+  if(u.desk!==APP.desk||u.id!==id)return;
+  readActorNotifs();
+}
+// ---- Actor DM (Phase G5A): secret two-ship %group conversations, idempotent per
+// [current Actor Identity, target]. Adopt claims an incoming one. Post via sec.3. ----
+async function findOrCreateActorDm(){
+  const ship=($('admTarget').value||'').trim();
+  if(!ship){setStatus('enter a target ~ship','err');return}
+  const body=addActor({action:'find-or-create-actor-dm',requestId:nextReq(),app:APP,data:{ship}});
+  pendingSelect=body.requestId;  // showResult selects the note on actor-dm-created/found
+  setStatus('poke find-or-create-actor-dm …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',body);
+    if(!ok){setStatus('find-or-create-actor-dm poke failed','err');pendingSelect=null;return}
+    await sleep(550); await listNotes(); readActorDms();
+  }catch(e){setStatus(e.message,'err');pendingSelect=null}
+}
+async function adoptActorDm(){
+  if(!selected){setStatus('select an actor-DM note first','err');return}
+  setStatus('poke actor-adopt-dm …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'actor-adopt-dm',requestId:nextReq(),app:APP,data:{noteId:selected}}));
+    if(!ok){setStatus('actor-adopt-dm poke failed','err');return}
+    await sleep(400); setStatus('actor-adopt-dm sent.','ok'); readActorDms();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function readActorDms(){
+  const desk=APP.desk; const id=($('actorId').value||'').trim();
+  if(!id){setStatus('enter an actor id (Actor Identity)','err');return}
+  setStatus('scry /api/actors/'+desk+'/'+id+'/dms …');
+  try{
+    const res=await api.scry('noltbook','/api/actors/'+encodeURIComponent(desk)+'/'+encodeURIComponent(id)+'/dms');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    const ds=(res&&res.dms)||[];
+    $('actorDms').innerHTML='<div><strong>%'+esc(desk)+'/'+esc(id)+'</strong> — '+ds.length+' actor DM(s):</div>'
+      +(ds.length?ds.map(d=>{
+        const o=d.actorDm||{};
+        const owner='%'+esc(o.desk||'')+'/'+esc(o.id||'')+' ('+esc(o.ownerName||'')+') on '+esc(o.host||'');
+        const cp=(typeof d.counterpart==='string')?('ship '+esc(d.counterpart)):('actor '+esc((d.counterpart&&d.counterpart.ownerName)||'')+' on '+esc((d.counterpart&&d.counterpart.host)||''));
+        const flag=[d.owned?'OWNED':null,d.adopted?'ADOPTED':null].filter(Boolean).join('+')||'(none)';
+        return '<div><b>'+esc(d.noteId)+'</b> · '+flag+' · target '+esc(d.target)+' · counterpart '+cp+' · owner '+owner+(d.lastPreview?(' · last: '+esc(d.lastPreview)):'')+_readState(d)+'</div>';
+      }).join(''):'<div>none</div>');
+    setStatus(ds.length+' actor DMs','ok');
+  }catch(e){setStatus(e.message,'err');$('actorDms').textContent=String(e)}
 }
 // ---- durable app-note metadata (set-note-app) ----
 async function setNoteApp(){
