@@ -31,6 +31,9 @@
   tr.note-row{cursor:pointer}
   tr.note-row:hover td{background:rgba(255,170,0,.06)}
   tr.note-row.on td{background:rgba(255,170,0,.12);box-shadow:inset 2px 0 0 var(--amber)}
+  .anote-row{cursor:pointer;padding:.15rem .3rem;border-radius:3px;border:1px solid transparent}
+  .anote-row:hover{background:rgba(255,170,0,.06)}
+  .anote-row.on{background:rgba(255,170,0,.12);border-color:var(--amber)}
   .msg{padding:.3rem 0 .3rem .4rem;border-bottom:1px solid rgba(255,255,255,.05)}
   .msg.click{cursor:pointer}
   .msg.click:hover{background:rgba(255,170,0,.05)}
@@ -403,7 +406,7 @@
     </div>
     <div class="row" style="margin-bottom:.3rem">
       <span class="muted" style="font-size:.74rem">delete as actor (only a note this exact actor owns):</span>
-      <button onclick="deleteActorNote()" style="border-color:#ff4444;color:#ff4444;font-weight:bold">Delete as Actor</button>
+      <button id="delActorBtn" onclick="deleteActorNote()" style="border-color:#ff4444;color:#ff4444;font-weight:bold">Delete as Actor</button>
     </div>
     <div class="row">
       <input id="cfgName" placeholder="new name (blank = keep)" size="22">
@@ -457,6 +460,42 @@
       <button onclick="actorMarkNoteRead()">Mark Selected Read as Actor</button>
     </div>
     <div id="actorParticipation" class="muted" style="font-size:.74rem;margin-top:.3rem"></div>
+    <hr style="border-color:#333;margin:.5rem 0">
+    <div class="muted" style="font-size:.78rem"><strong>A2 Actor Membership (single-ship)</strong> — note ID is editable: an actor may know a private/secret note ID it cannot select from its own list.</div>
+    <div class="row" style="margin-top:.3rem">
+      <input id="mNoteId" size="24" placeholder="noteId (editable)">
+      <button onclick="membFillNote()">⟵ from selected</button>
+      <span class="muted" style="font-size:.72rem">target:</span>
+      <input id="mHost" size="7" value="~zod" placeholder="host">
+      <input id="mDesk" size="11" placeholder="desk (blank=app)">
+      <input id="mId" size="9" placeholder="actor id">
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <span class="muted" style="font-size:.72rem">self (Actor Identity above):</span>
+      <button id="mJoinBtn" onclick="membSelfJoin()">Join / Request Note as Actor</button>
+      <button id="mLeaveBtn" onclick="membSelfLeave()">Leave Note as Actor</button>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <span class="muted" style="font-size:.72rem">owner-actor (app+actor):</span>
+      <select id="mOwnerOp"><option>approve</option><option>deny</option><option>invite</option><option>remove</option><option>mute</option><option>unmute</option></select>
+      <button id="mOwnerBtn" onclick="membOwnerOp()">Apply as Owner Actor</button>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <span class="muted" style="font-size:.72rem">ordinary host/admin:</span>
+      <select id="mHostOp"><option>approve</option><option>deny</option><option>invite</option><option>remove</option><option>mute</option><option>unmute</option></select>
+      <button id="mHostBtn" onclick="membHostOp()">Apply as Host/Admin</button>
+    </div>
+    <div class="row" style="margin-top:.3rem;border:1px solid #ff4444;border-radius:3px;padding:.2rem">
+      <span style="color:#ff4444;font-weight:bold;font-size:.72rem">HOST EMERGENCY (destructive):</span>
+      <select id="mEmgOp"><option>mute</option><option>unmute</option><option>remove</option></select>
+      <button id="mEmgBtn" onclick="membEmergencyOp()" style="border-color:#ff4444;color:#ff4444;font-weight:bold">Apply Emergency</button>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <button onclick="readNoteActors()">Read Note Actors</button>
+      <button onclick="readHostActorRequests()">Read Host Actor Requests</button>
+      <button onclick="readActorScopedMembership()">Read Actor-Scoped Membership</button>
+    </div>
+    <div id="membOut" class="muted" style="font-size:.74rem;margin-top:.3rem"></div>
   </div>
 
   <div class="card">
@@ -721,6 +760,22 @@ function showResult(r){
     }
     // on FAIL: preserve selectedEntry + reply-target line; do not Read Recent.
   }
+  // Actor-note delete: resolve ONLY on its real %api-result. The result line/log above is
+  // the authoritative code+message. Verify success via the actor-scoped route; never clear
+  // selection on FAIL or before a verified-absent success.
+  if(pendingActorDelete&&r.requestId===pendingActorDelete.requestId){
+    const pd=pendingActorDelete; pendingActorDelete=null; setDelActorBtn(false);
+    if(ok&&r.code==='actor-note-deleted'){
+      _verifyActorDeleteGone(pd);  // async; the result log line stays the authority
+    }
+    // on FAIL: selection preserved; the result line already shows the exact backend code.
+  }
+  // A2 membership mutation: resolve ONLY on its real %api-result. OK => silent refresh of
+  // the relevant read; FAIL => preserve inputs, the result log shows the exact code/message.
+  if(pendingMemb&&r.requestId===pendingMemb.requestId){
+    const pm=pendingMemb; pendingMemb=null; setMembBtn(pm.btnId,false);
+    if(ok&&pm.refresh)pm.refresh(r);
+  }
 }
 function openResultStream(){
   resultStream=new EventSource(api.url,{withCredentials:true});
@@ -732,6 +787,16 @@ function openResultStream(){
     else if(d.json['api-search-result'])showSearch(d.json['api-search-result']);
     else if(d.json['actor-profile-result'])showActorProfileResult(d.json['actor-profile-result']);
     else if(d.json['actor-notifications-updated'])showActorNotifsUpdated(d.json['actor-notifications-updated']);
+    // A2 live membership facts (emitted in a later backend pass; harness is ready for them).
+    // Silently refresh the visible membership read without overwriting the result status.
+    else if(d.json['actor-roster-updated']||d.json['note-actor-muted-updated']){
+      const f=d.json['actor-roster-updated']||d.json['note-actor-muted-updated'];
+      if(f&&f.noteId&&f.noteId===membNote())readNoteActors({silent:true});
+    }
+    else if(d.json['actor-request-updated']){
+      const f=d.json['actor-request-updated'];
+      if(f&&f.noteId&&f.noteId===membNote())readHostActorRequests({silent:true});
+    }
   };
   resultStream.onerror=()=>{
     $('sub').className='status err';
@@ -741,6 +806,11 @@ function openResultStream(){
     // G6B: an in-flight reply can no longer be confirmed — release it (keep the target
     // selected) so the user can retry once reconnected.
     if(pendingReply){pendingReply=null;setReplyBtn(false);setStatus('result stream dropped — reply unconfirmed; reconnect and retry','err');}
+    // an in-flight actor-note delete can no longer be confirmed — release it, restore the
+    // button, KEEP the selection, and never claim deletion.
+    if(pendingActorDelete){pendingActorDelete=null;setDelActorBtn(false);setStatus('result stream dropped — actor delete UNCONFIRMED (note NOT deleted as far as we know); reload to reconnect and retry','err');}
+    // A2: an in-flight membership mutation can no longer be confirmed — release + report unconfirmed.
+    if(pendingMemb){const pm=pendingMemb;pendingMemb=null;setMembBtn(pm.btnId,false);setStatus('result stream dropped — membership action UNCONFIRMED; reload to reconnect and retry','err');}
   };
 }
 async function initResults(){
@@ -790,13 +860,40 @@ async function refreshNotesTable(){
     $('notes').innerHTML=notesTable();
   }catch(e){}
 }
+// selection source/context. `selected` stays the single canonical note id; these only
+// record WHERE the selection came from so an actor-scoped pick can be highlighted and
+// cleared when the actor identity changes. 'host' | 'actor'.
+let selectedSource='host';
+let selectedActorCtx=null;   // {desk,id} an actor-scoped selection was made under
+function _highlightActorRows(){
+  const c=$('actorParticipation'); if(!c)return;
+  c.querySelectorAll('.anote-row[data-note-id]').forEach(el=>{
+    el.classList.toggle('on', selectedSource==='actor'&&el.dataset.noteId===selected);
+  });
+}
 function pick(id){
   if(id!==selected)selectedEntry=null;  // switching notes clears entry selection
+  selectedSource='host'; selectedActorCtx=null;
   setSel(id);
   $('notes').innerHTML=notesTable();     // re-highlight without a full reload
+  _highlightActorRows();                 // drop any actor-panel highlight
   setStatus('selected '+id,'ok');
   readRecent();                          // switch visible details to this note
   readMeta();
+}
+// select an actor-owned note (from the Actor Notes panel). Sets the SAME canonical
+// `selected` id + preserves the owning actor identity, so Configure/Delete/Post as Actor,
+// membership controls, and the (cooperative) Read Meta/Read Recent routes all work.
+function pickActor(id){
+  if(id!==selected)selectedEntry=null;
+  selectedSource='actor';
+  selectedActorCtx={desk:APP.desk,id:($('actorId').value||'').trim()};
+  setSel(id);
+  $('notes').innerHTML=notesTable();     // host list won't contain it -> clears host row
+  _highlightActorRows();                 // highlight the picked actor row
+  setStatus('selected actor note '+id+' (as %'+selectedActorCtx.desk+'/'+selectedActorCtx.id+')','ok');
+  readRecent();                          // /api/notes/<id> — cooperative, valid for actor notes
+  readMeta();                            // /api/notes/<id>/meta — cooperative, valid for actor notes
 }
 
 async function createOrFind(){
@@ -1129,6 +1226,13 @@ function setReplyBtn(pending){
   const b=$('replyBtn'); if(!b)return;
   b.disabled=pending; b.textContent=pending?'Waiting…':'Reply to Selected Message';
 }
+// {requestId, noteId, desk, id} of an in-flight actor-note delete awaiting %api-result.
+// Correlated exactly like pendingReply; verified ONLY via the actor-scoped notes route.
+let pendingActorDelete=null;
+function setDelActorBtn(pending){
+  const b=$('delActorBtn'); if(!b)return;
+  b.disabled=pending; b.textContent=pending?'Deleting…':'Delete as Actor';
+}
 async function replyToSelectedMessage(){
   if(pendingReply){setStatus('reply already pending','err');return}
   if(!selected){setStatus('select/create a note first','err');return}
@@ -1171,6 +1275,24 @@ updateRefPreview();
 $('notes').addEventListener('click',ev=>{
   const tr=ev.target.closest('tr.note-row');
   if(tr&&tr.dataset.noteId)pick(tr.dataset.noteId);
+});
+// Actor Notes panel: rows are selectable via the SAME canonical `selected` id.
+$('actorParticipation').addEventListener('click',ev=>{
+  const row=ev.target.closest('.anote-row[data-note-id]');
+  if(row&&row.dataset.noteId)pickActor(row.dataset.noteId);
+});
+// switching actor identity (APP.desk is fixed) invalidates an actor-scoped selection —
+// the new actor may not own/participate in it, so clear it conservatively.
+$('actorId').addEventListener('input',()=>{
+  if(selectedSource!=='actor'||!selectedActorCtx)return;
+  const cur=($('actorId').value||'').trim();
+  if(cur===selectedActorCtx.id)return;
+  selected=null;$('sel').textContent='none';selectedEntry=null;
+  selectedSource='host';selectedActorCtx=null;
+  $('recent').innerHTML='';$('meta').innerHTML='';
+  if($('people'))$('people').innerHTML='';
+  _highlightActorRows();
+  setStatus('actor identity changed — cleared the actor-scoped selection','ok');
 });
 $('recent').addEventListener('click',ev=>{
   const btn=ev.target.closest('button[data-act]');
@@ -1814,30 +1936,63 @@ async function configureAsActor(){
 // requires a browser confirm naming the selected note. On success the note vanishes,
 // so we re-list and, if it's gone, clear the selection + recent/meta/member panels.
 // The result log (stream) is preserved and shows the honest backend code on failure.
+// Request-correlated (pendingActorDelete) like the reply flow. The result is resolved in
+// showResult(); verification is ONLY via the actor-scoped notes route, NEVER /api/notes
+// (which excludes actor-owned notes even before deletion). Selection is preserved until a
+// verified-absent success.
 async function deleteActorNote(){
+  if(pendingActorDelete){setStatus('an actor-note delete is already pending','err');return}
   if(!selected){setStatus('select a note first','err');return}
+  const id=($('actorId').value||'').trim();
+  if(!id){setStatus('enter an actor id (Actor Identity)','err');return}
+  // a delete can only be CONFIRMED via the live /api/results stream — require it.
+  if(!resultStream){setStatus('connect the result stream first (sec. 0) — an actor delete cannot be confirmed without it','err');return}
   const target=selected;
+  const desk=APP.desk;
   const ent=(lastNotes||[]).find(n=>n.id===target);
   const nm=ent?(ent.name||ent.id):target;
-  if(!confirm('Delete note "'+nm+'"\n('+target+')\nas the current Actor Identity? This cannot be undone.')){
+  if(!confirm('Delete note "'+nm+'"\n('+target+')\nas actor %'+desk+'/'+id+'? This cannot be undone.')){
     setStatus('delete cancelled','ok');return;
   }
+  const rid=nextReq();
+  // store pending state BEFORE the poke; the button locks; selection stays put.
+  pendingActorDelete={requestId:rid,noteId:target,desk:desk,id:id};
+  setDelActorBtn(true);
   setStatus('poke delete-actor-note …');
   try{
-    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'delete-actor-note',requestId:nextReq(),app:APP,data:{noteId:target}}));
-    if(!ok){setStatus('delete-actor-note poke failed','err');return}
-    await sleep(450);
-    await listNotes();  // refetch lastNotes
-    const gone=!(lastNotes||[]).some(n=>n.id===target);
-    if(gone){
-      if(selected===target){selected=null;$('sel').textContent='none';selectedEntry=null}
-      $('recent').innerHTML='';$('meta').innerHTML='';$('people').innerHTML='';
-      $('notes').innerHTML=notesTable();
-      setStatus('actor note deleted.','ok');
-    }else{
-      setStatus('note still present — see result log for the backend code','err');
+    const ok=await api.poke('noltbook','noltbook-api',addActor({action:'delete-actor-note',requestId:rid,app:APP,data:{noteId:target}}));
+    if(!ok){pendingActorDelete=null;setDelActorBtn(false);setStatus('delete-actor-note poke failed','err');return}
+    // delivered, NOT confirmed. RACE: the matching result may already have arrived on the
+    // EventSource while we awaited the poke. Only claim "waiting" if THIS request is still
+    // pending — otherwise showResult() already resolved it and is the authority.
+    if(pendingActorDelete&&pendingActorDelete.requestId===rid){setStatus('delete-actor-note submitted; waiting for result …');}
+  }catch(e){pendingActorDelete=null;setDelActorBtn(false);setStatus(e.message,'err')}
+}
+// Verify an actor-note delete via the AUTHORITATIVE actor-scoped route. Refreshes the
+// actor-notes panel silently (no setStatus from the read itself), then sets exactly one
+// final verdict. Never claims deletion unless the note is actually absent there.
+async function _verifyActorDeleteGone(pd){
+  try{
+    const res=await api.scry('noltbook','/api/actors/'+encodeURIComponent(pd.desk)+'/'+encodeURIComponent(pd.id)+'/notes');
+    const ns=(res&&res.notes)||[];
+    if($('actorParticipation')){
+      $('actorParticipation').innerHTML='<div><strong>%'+esc(pd.desk)+'/'+esc(pd.id)+'</strong> — '+ns.length+' actor note(s):</div>'
+        +(ns.length?ns.map(_actorNoteLine).join(''):'<div>none</div>');
     }
-  }catch(e){setStatus(e.message,'err')}
+    if(ns.some(n=>n.id===pd.noteId)){
+      // backend reported success but the actor still owns/lists it -> consistency error.
+      setStatus('CONSISTENCY ERROR: backend reported actor-note-deleted but /api/actors/'+pd.desk+'/'+pd.id+'/notes still lists '+pd.noteId+' — selection preserved','err');
+      return;
+    }
+    // verified absent: only now clear selection + dependent panels.
+    if(selected===pd.noteId){selected=null;$('sel').textContent='none';selectedEntry=null;selectedSource='host';selectedActorCtx=null;}
+    $('recent').innerHTML='';$('meta').innerHTML='';$('people').innerHTML='';
+    $('notes').innerHTML=notesTable();
+    setStatus('actor note deleted — verified absent in /api/actors/'+pd.desk+'/'+pd.id+'/notes','ok');
+  }catch(e){
+    // verification scry failed: do NOT claim deletion; keep the selection for a retry.
+    setStatus('delete result OK but verification scry failed: '+e.message+' — selection preserved; re-run Read Actor Notes','err');
+  }
 }
 // ---- Actor Notes (Phase G2): durable actor participation. Join/add/remove only
 // manage [app.desk, actorId] rows; the host @p stays the real note.users member.
@@ -1885,7 +2040,10 @@ function _readState(n){
 function _actorNoteLine(n){
   const flags=[n.owned?'owned':null,n.participant?'participant':null].filter(Boolean).join('+')||'(none)';
   const owner=n.actorOwner?('%'+esc(n.actorOwner.desk)+'/'+esc(n.actorOwner.id)):'—';
-  return '<div><b>'+esc(n.name)+'</b> <span class="muted">'+esc(n.id)+'</span> · '+esc(n.type)
+  // selectable row (event-delegated; data-note-id only — no inline JS interpolation).
+  const on=(selectedSource==='actor'&&n.id===selected)?' on':'';
+  return '<div class="anote-row'+on+'" data-note-id="'+esc(n.id)+'" title="click to select this actor note">'
+    +'<b>'+esc(n.name)+'</b> <span class="muted">'+esc(n.id)+'</span> · '+esc(n.type)
     +' · '+flags+' · owner '+owner+' · users '+(n.userCount||0)+_readState(n)+'</div>';
 }
 // actor-mark-note-read: explicit only — reading the route never marks read.
@@ -1927,6 +2085,120 @@ async function readActorNoteDetail(){
       +msgs.map(m=>'<div>'+esc(m.author)+(m.actor?(' ['+esc(m.actor.name)+' %'+esc(m.actor.desk)+']'):'')+': '+esc((m.text||'').slice(0,120))+'</div>').join('');
     setStatus('actor note detail · '+msgs.length+' msgs','ok');
   }catch(e){setStatus(e.message,'err');$('actorParticipation').textContent=String(e)}
+}
+// ============ A2 Actor Membership controls + reads ============
+function membFillNote(){$('mNoteId').value=selected||''}
+function membNote(){return ($('mNoteId').value||'').trim()||selected||''}
+function membDesk(){return ($('mDesk').value||'').trim()}        // '' => omit (server default = app desk where allowed)
+function membHostV(){return ($('mHost').value||'~zod').trim()}
+function membTargetId(){return ($('mId').value||'').trim()}
+// one shared request-correlated pending slot (pendingReply/pendingActorDelete pattern).
+let pendingMemb=null;
+function setMembBtn(id,on){const b=$(id);if(!b)return;if(on&&b._t==null)b._t=b.textContent;b.disabled=on;b.textContent=on?'Working…':(b._t||b.textContent)}
+async function membPoke(mark,body,btnId,refreshFn){
+  if(pendingMemb){setStatus('a membership action is already pending','err');return}
+  if(!resultStream){setStatus('connect the result stream first (sec. 0) — membership cannot be confirmed without it','err');return}
+  const rid=nextReq();body.requestId=rid;
+  pendingMemb={requestId:rid,btnId:btnId,refresh:refreshFn};
+  setMembBtn(btnId,true);
+  setStatus('poke '+body.action+' …');
+  try{
+    const ok=await api.poke('noltbook',mark,body);
+    if(!ok){pendingMemb=null;setMembBtn(btnId,false);setStatus(body.action+' poke failed','err');return}
+    // RACE: result may already have resolved this rid via the stream; only claim waiting if still pending.
+    if(pendingMemb&&pendingMemb.requestId===rid)setStatus(body.action+' submitted; waiting for result …');
+  }catch(e){pendingMemb=null;setMembBtn(btnId,false);setStatus(e.message,'err')}
+}
+function membSelfJoin(){
+  const nid=membNote();if(!nid){setStatus('enter/select a note id','err');return}
+  membPoke('noltbook-api',addActor({action:'actor-join-note',app:APP,data:{noteId:nid}}),'mJoinBtn',refreshSelfMembershipSilent);
+}
+function membSelfLeave(){
+  const nid=membNote();if(!nid){setStatus('enter/select a note id','err');return}
+  membPoke('noltbook-api',addActor({action:'actor-leave-note',app:APP,data:{noteId:nid}}),'mLeaveBtn',refreshSelfMembershipSilent);
+}
+function membOwnerOp(){
+  const nid=membNote();if(!nid){setStatus('enter/select a note id','err');return}
+  const op=$('mOwnerOp').value;
+  const map={approve:'actor-approve-request',deny:'actor-deny-request',invite:'actor-add-participant',remove:'actor-remove-participant',mute:'actor-mute-participant',unmute:'actor-unmute-participant'};
+  const data={noteId:nid,targetId:membTargetId()};
+  const d=membDesk();if(d)data.targetDesk=d;   // omitted => server default (owner app desk) for add/remove only
+  membPoke('noltbook-api',addActor({action:map[op],app:APP,data:data}),'mOwnerBtn',refreshOwnerMembershipSilent);
+}
+function membHostOp(){
+  const nid=membNote();if(!nid){setStatus('enter/select a note id','err');return}
+  const data={noteId:nid,op:$('mHostOp').value,targetHost:membHostV(),targetId:membTargetId()};
+  const d=membDesk();if(d)data.targetDesk=d;
+  membPoke('noltbook-api',{action:'manage-note-actor',data:data},'mHostBtn',refreshHostMembershipSilent);
+}
+function membEmergencyOp(){
+  const nid=membNote();if(!nid){setStatus('enter/select a note id','err');return}
+  const op=$('mEmgOp').value;
+  if(op==='remove'&&!confirm('EMERGENCY remove actor %'+membHostV()+'/'+(membDesk()||'?')+'/'+membTargetId()+' from '+nid+'?\nThis is a host safety control and cannot be undone.'))return;
+  const data={noteId:nid,op:op,targetHost:membHostV(),targetId:membTargetId()};
+  const d=membDesk();if(d)data.targetDesk=d;
+  membPoke('noltbook-api',{action:'emergency-manage-note-actor',data:data},'mEmgBtn',refreshOwnerMembershipSilent);
+}
+function refreshSelfMembershipSilent(result){
+  if(result&&result.code==='actor-join-requested')return;
+  return readActorScopedMembership({silent:true});
+}
+function refreshOwnerMembershipSilent(){return readActorScopedMembership({silent:true})}
+function refreshHostMembershipSilent(result){
+  if(result&&result.code==='actor-request-denied')return readHostActorRequests({silent:true});
+  return readNoteActors({silent:true});
+}
+// ---- reads (member-safe roster / host requests / actor-scoped membership) ----
+function _refRow(a,extra){
+  return '<div data-host="'+esc(a.host||'')+'" data-desk="'+esc(a.desk||'')+'" data-id="'+esc(a.id||'')+'">'
+    +'<b>'+esc(a.name||a.id||'?')+'</b> <span class="muted">'+esc(a.host||'')+'/'+esc(a.desk||'')+'/'+esc(a.id||'')+'</span>'
+    +' · '+esc(a.kind||'?')+' · '+esc(a.lifecycleStatus||a.role||'')+(a.muted?' · <span style="color:#ff8">MUTED</span>':'')+(extra?(' · '+extra):'')+'</div>';
+}
+function _renderActors(res){
+  const o=res.owner;const acts=res.actors||[];
+  return '<div><strong>note '+esc(res.noteId||'')+'</strong></div>'
+    +'<div class="muted">owner:</div>'+(o?_refRow(o,'owner'):'<div class="muted">none</div>')
+    +'<div class="muted">members ('+acts.length+'):</div>'+(acts.length?acts.map(a=>_refRow(a)).join(''):'<div class="muted">none</div>');
+}
+async function readNoteActors(opts){
+  const silent=!!(opts&&opts.silent);
+  const nid=membNote();if(!nid){if(!silent)setStatus('enter/select a note id','err');return}
+  try{
+    const res=await api.scry('noltbook','/api/notes/'+encodeURIComponent(nid)+'/actors');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    if(!res){$('membOut').innerHTML='<div class="muted">not visible / 404 (member-safe route)</div>';if(!silent)setStatus('not visible (404)','err');return}
+    $('membOut').innerHTML=_renderActors(res);if(!silent)setStatus('note actors read','ok');
+  }catch(e){if(!silent)setStatus(e.message,'err');$('membOut').textContent=String(e)}
+}
+async function readHostActorRequests(opts){
+  const silent=!!(opts&&opts.silent);
+  const nid=membNote();if(!nid){if(!silent)setStatus('enter/select a note id','err');return}
+  try{
+    const res=await api.scry('noltbook','/api/notes/'+encodeURIComponent(nid)+'/actor-requests');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    if(!res){$('membOut').innerHTML='<div class="muted">not authorized / not an ordinary local note / 404</div>';if(!silent)setStatus('not authorized (404)','err');return}
+    const rq=res.requests||[];
+    $('membOut').innerHTML='<div><strong>host actor-requests · note '+esc(res.noteId||nid)+'</strong> ('+rq.length+')</div>'+(rq.length?rq.map(a=>_refRow(a,'pending')).join(''):'<div class="muted">none</div>');
+    if(!silent)setStatus(rq.length+' pending host request(s)','ok');
+  }catch(e){if(!silent)setStatus(e.message,'err');$('membOut').textContent=String(e)}
+}
+async function readActorScopedMembership(opts){
+  const silent=!!(opts&&opts.silent);
+  const nid=membNote();if(!nid){if(!silent)setStatus('enter/select a note id','err');return}
+  const desk=APP.desk; const id=($('actorId').value||'').trim();
+  if(!id){if(!silent)setStatus('enter an actor id (Actor Identity)','err');return}
+  try{
+    const res=await api.scry('noltbook','/api/actors/'+encodeURIComponent(desk)+'/'+encodeURIComponent(id)+'/notes/'+encodeURIComponent(nid));
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,9000);
+    if(!res){$('membOut').innerHTML='<div class="muted">actor-not-participant or missing (404)</div>';if(!silent)setStatus('no access / 404','err');return}
+    const m=res.membership||{};const mut=m.mutedActors||[];const pend=m.pendingRequests||[];
+    $('membOut').innerHTML='<div><strong>actor-scoped %'+esc(desk)+'/'+esc(id)+' · note '+esc(nid)+'</strong></div>'
+      +'<div class="muted">owner:</div>'+(m.owner?_refRow(m.owner,'owner'):'<div class="muted">none</div>')
+      +'<div class="muted">actors ('+(m.actors||[]).length+'):</div>'+((m.actors||[]).map(a=>_refRow(a)).join('')||'<div class="muted">none</div>')
+      +'<div class="muted">mutedActors (owner-only): '+mut.length+'</div>'+mut.map(a=>_refRow(a,'muted')).join('')
+      +'<div class="muted">pendingRequests (owner-only): '+pend.length+'</div>'+pend.map(a=>_refRow(a,'pending')).join('');
+    if(!silent)setStatus('actor-scoped membership read','ok');
+  }catch(e){if(!silent)setStatus(e.message,'err');$('membOut').textContent=String(e)}
 }
 // ---- Actor Notifications (Phase G6B): reply-only directed notifications ----
 // one resolved reply row: sender identity (actor or ship), preview, time, Clear button.

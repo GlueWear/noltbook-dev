@@ -1293,3 +1293,56 @@ The API was built in numbered phases; each numbered section above corresponds to
 slice of that work. The behavior documented here is current; phase numbers are kept
 only where they pin a wire/state version detail (e.g. cross-ship `via` requires every
 participating ship to run the matching code).
+
+## A2 — Actor membership, requests, and note-level mute (single-ship)
+
+Backend reads + the noltbook-dev **A2 Actor Membership** card. **Local-only**; the remote
+actor join/install/carrier protocol and main-Noltbook ACTORS Members UI are **deferred to A3**.
+
+### Visibility / join semantics
+- **Public** note → an actor `actor-join-note` joins directly → result `actor-joined`.
+- **Private / Secret** note → `actor-join-note` creates a durable request → `actor-join-requested`.
+  Secret stays undiscoverable; a known-ID request never changes discovery. The note ID field is
+  editable precisely because an actor can know a private/secret ID it cannot select.
+- The note's **owner actor** (via its app, `%manage-members`) approves / denies / invites /
+  removes / mutes / unmutes. Approval + invite convert a `%notebook` to `%group`.
+
+### Note-level actor mute
+`note-actor-muted` is per-actor (never the carrier ship). A muted actor's **post / app-ref /
+edit / delete** fail with `note-actor-muted`; it can still **read, manage notifications, and
+leave**. A muted **owner** also cannot configure/delete/moderate (emergency mute neutralizes
+a rogue owner). Codes: set=`note-actor-mute-set`, clear=`note-actor-mute-cleared`,
+blocked-write=`note-actor-muted`.
+
+### Authority families
+- **Owner-actor** (app-attributed API): `actor-approve-request` / `actor-deny-request` /
+  `actor-add-participant` / `actor-remove-participant` / `actor-mute-participant` /
+  `actor-unmute-participant`. `targetDesk` is the strict three-state spec (omitted ⇒ owner app
+  desk for add/remove; required for approve/deny/mute/unmute; malformed ⇒ `actor-invalid`).
+- **Ordinary host/admin** (`manage-note-actor {op,noteId,targetHost,targetDesk,targetId}`):
+  ordinary (non-actor-owned) notes only; host/admin authority; ops approve/deny/invite/remove/
+  mute/unmute. Remote-admin forwarding is deferred to A3 (`unsupported`).
+- **Explicit host emergency** (`emergency-manage-note-actor {op,…}`): actor-owned notes only;
+  ops **mute / unmute / remove**; remove rejects the exact owner; mute may target the owner;
+  never approves/denies/invites and never a silent fallback. Codes `emergency-actor-*`.
+
+### Read shapes (cooperative same-ship developer scries — NOT hard app auth)
+- `GET /api/notes/<noteId>/actors` → `{noteId, owner, actors:[{host,desk,id,name,kind,
+  lifecycleStatus,role,muted}]}` — member-safe; requires the local human to logically see the
+  note; owner first, deduped; **no pending requests**.
+- `GET /api/notes/<noteId>/actor-requests` → `{noteId, requests:[…]}` — ordinary locally-hosted
+  note + real host/admin authority only (NOT merely `human-sees-note`); hidden actor-owned
+  requests never appear; actor-DM ⇒ 404.
+- `GET /api/actors/<desk>/<id>/notes/<noteId>` → adds `membership:{owner,actors,mutedActors,
+  pendingRequests}` — `mutedActors`/`pendingRequests` populated **only for the exact owner
+  actor**; participating non-owners get member-safe roster only.
+
+The **mutation handlers are the real authority boundary**; a scry cannot prove app/actor identity.
+
+### Harness card
+Edit the note ID (or `⟵ from selected`), set target host/desk/id, then use Self / Owner-Actor /
+Host-Admin / **Host Emergency** rows, or the three Read buttons. Mutations are request-correlated
+(require the result stream; duplicate-guarded; OK silently refreshes the read; FAIL preserves
+inputs and shows the exact code; stream drop ⇒ reported unconfirmed). Live `actor-roster-updated`
+/`actor-request-updated`/`note-actor-muted-updated` facts are handled if/when the backend emits
+them (A2 currently refreshes by re-reading).
