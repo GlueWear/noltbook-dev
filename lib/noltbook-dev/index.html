@@ -574,6 +574,40 @@
   </div>
 
   <div class="card">
+    <h2>8e &middot; APP NOTIFICATIONS</h2>
+    <p class="hint">Public API for app-owned high-level Noltbook/Grimoire notifications.
+    Requires top-level <code>app:APP</code>. Rows are keyed by <code>[desk,id]</code>;
+    TTL is optional, and reads come from <code>/api/app-notifications</code>.</p>
+    <div class="row">
+      <input id="appNotifId" placeholder="id" value="demo" size="14">
+      <input id="appNotifTitle" placeholder="title" value="Lab notification" size="24">
+      <label>level
+        <select id="appNotifLevel">
+          <option value="info">info</option>
+          <option value="success">success</option>
+          <option value="warning">warning</option>
+          <option value="error">error</option>
+        </select>
+      </label>
+      <input id="appNotifTtl" placeholder="ttl seconds" value="300" type="number" size="8">
+    </div>
+    <div class="row">
+      <input id="appNotifBody" placeholder="body optional" value="Hello from %noltbook-dev" size="48">
+    </div>
+    <div class="row">
+      <input id="appNotifHref" placeholder="href optional" value="/apps/noltbook-dev/" size="34">
+      <input id="appNotifNoteId" placeholder="noteId optional (blank uses selected)" size="32">
+      <input id="appNotifArtifactId" placeholder="artifactId optional" size="18">
+    </div>
+    <div class="row">
+      <button class="primary" onclick="setAppNotification()">Set App Notification</button>
+      <button onclick="clearAppNotification()">Clear App Notification</button>
+      <button onclick="readAppNotifications()">Read App Notifications</button>
+    </div>
+    <div id="appNotifications" class="muted" style="font-size:.74rem;margin-top:.3rem"></div>
+  </div>
+
+  <div class="card">
     <h2>9 &middot; ARTIFACT CREATE</h2>
     <p class="hint">Poke <code>create-artifact</code> (code/app only — no raw file
     upload in 12A) into the <b>selected note</b>, with APP attribution. Result shows
@@ -1398,6 +1432,58 @@ async function clearNoteActive(){
     if(!ok){setStatus('clear-note-active poke failed','err');return}
     await sleep(400); setStatus('active cleared.','ok'); readRecent();
   }catch(e){setStatus(e.message,'err')}
+}
+// app-owned high-level notifications for Noltbook's Grimoire/inbox surface.
+function appNotifData(requireTitle){
+  const id=$('appNotifId').value.trim();
+  const title=$('appNotifTitle').value.trim();
+  if(!id){setStatus('enter an app notification id','err');return null}
+  if(requireTitle&&!title){setStatus('enter an app notification title','err');return null}
+  const data={id};
+  if(requireTitle)data.title=title;
+  const body=$('appNotifBody').value.trim(); if(body)data.body=body;
+  const href=$('appNotifHref').value.trim(); if(href)data.href=href;
+  const nid=($('appNotifNoteId').value.trim()||selected||''); if(nid)data.noteId=nid;
+  const aid=$('appNotifArtifactId').value.trim(); if(aid)data.artifactId=aid;
+  const level=$('appNotifLevel').value; if(level)data.level=level;
+  const ttl=parseInt($('appNotifTtl').value,10); if(Number.isFinite(ttl)&&ttl>=0)data.ttl=ttl;
+  return data;
+}
+async function setAppNotification(){
+  const data=appNotifData(true); if(!data)return;
+  setStatus('poke set-app-notification …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'set-app-notification',requestId:nextReq(),app:APP,data});
+    if(!ok){setStatus('set-app-notification poke failed','err');return}
+    await sleep(400); setStatus('app notification set.','ok'); readAppNotifications();
+  }catch(e){setStatus(e.message,'err')}
+}
+async function clearAppNotification(){
+  const data=appNotifData(false); if(!data)return;
+  setStatus('poke clear-app-notification …');
+  try{
+    const ok=await api.poke('noltbook','noltbook-api',{action:'clear-app-notification',requestId:nextReq(),app:APP,data:{id:data.id}});
+    if(!ok){setStatus('clear-app-notification poke failed','err');return}
+    await sleep(400); setStatus('app notification cleared.','ok'); readAppNotifications();
+  }catch(e){setStatus(e.message,'err')}
+}
+function appNotifTime(ms){return ms?new Date(ms).toLocaleString():'none'}
+function appNotifLine(n){
+  const bits=['<b>'+esc(n.id||'')+'</b>',esc((n.level||'info').toUpperCase()),'%'+esc(n.desk||'')];
+  if(n.noteId)bits.push('note '+esc(n.noteId));
+  if(n.artifactId)bits.push('artifact '+esc(n.artifactId));
+  if(n.expiresAt)bits.push('expires '+esc(appNotifTime(n.expiresAt)));
+  return '<div>'+bits.join(' · ')+'<br><span class="muted">'+esc(n.title||'')+(n.body?(' — '+esc(n.body)):'')+(n.href?(' · '+esc(n.href)):'')+'</span></div>';
+}
+async function readAppNotifications(){
+  setStatus('scry /api/app-notifications …');
+  try{
+    const res=await api.scry('noltbook','/api/app-notifications');
+    $('debug').textContent=JSON.stringify(res,null,2).slice(0,8000);
+    const ns=(res&&res.notifications)||[];
+    $('appNotifications').innerHTML=ns.length?ns.map(appNotifLine).join(''):'<div>none</div>';
+    setStatus(ns.length+' app notification(s)','ok');
+  }catch(e){setStatus(e.message,'err');$('appNotifications').textContent=String(e)}
 }
 // kind 'message' or 'artifact' (%code never passed). Setting replaces the pin.
 function pinBtnRow(eid,kind){

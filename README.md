@@ -144,6 +144,8 @@ Ship/host arguments are raw text, parsed server-side — a bad value returns
 | `clear-note-pin` | `{ noteId }` | `pin-cleared` / `missing-note` / `unsupported` / `rejected` |
 | `set-note-active` | top-level `app` + `{ noteId, label?, count?, ttl? }` | `active-set` / `missing-app` / `missing-note` / `unsupported` / `rejected` |
 | `clear-note-active` | `{ noteId }` | `active-cleared` / `missing-note` / `unsupported` / `rejected` |
+| `set-app-notification` | top-level `app` + `{ id, title, body?, href?, noteId?, artifactId?, level?, ttl? }` | `app-notification-set` / `missing-app` / `invalid-id` / `invalid-title` / `invalid-level` |
+| `clear-app-notification` | top-level `app` + `{ id }` | `app-notification-cleared` / `missing-app` / `invalid-id` |
 
 `set-note-config` changes only the fields you include (fans out to `rename-note` /
 `set-note-meta` / `set-headline`, one result fact). `visibility` is `public`/`private`/
@@ -190,6 +192,19 @@ pin: null
 ```
 
 Resolved fields are filled at read time and may be `null` if the target is gone.
+
+**App notifications** (`set-app-notification` / `clear-app-notification`) are
+app-owned high-level notifications for Noltbook's Grimoire/inbox surface. They require
+top-level `app` attribution; Noltbook stamps the real `desk`, app title, and
+publisher from that app object instead of trusting payload text. Rows are keyed by
+`[desk,id]`, so setting the same id updates that app's existing notification while
+preserving its original `createdAt`; clear is idempotent. `level` is one of
+`info`/`success`/`warning`/`error` (default `info`). `ttl` is optional and
+caps at 604800 seconds; expired rows are omitted from reads/snapshots and pruned on
+normal app-notification activity. `href` is stored as an opaque app hint; the main
+frontend only opens safe same-origin plugin hrefs, while `noteId` deep-links to a
+visible note. Live snapshots arrive as additive `%app-notifications-updated` facts on
+`/notes`, and the stable read is `/api/app-notifications`.
 
 **Active** (`set-note-active` / `clear-note-active`) is a developer/API-only note "live"
 status (e.g. "5 listening", "playing", "live") — separate from calls, with **one active
@@ -1231,6 +1246,7 @@ The harness is laid out section-by-section; each maps to one part of the API:
 - **Artifacts** — Create Artifact (code/app); Detail; Edit / Delete on the selected artifact.
 - **Pin** — in Read Recent, Pin a message or `%file`/`%app` artifact row (one pin per note); the pinned-item block shows kind/target/pinnedBy with Clear Pin. Verify: pin a message, pin a `%file`/`%app` artifact (`%code` has no Pin button), setting a new target **replaces** the pin, `clear-note-pin` clears it, a non-creator is `rejected`, and deleting the pinned target auto-clears the pin. Read Meta shows the `pin` line.
 - **Active** — *Active* card: Set Active (label/count/ttl; sends top-level `app:APP`) → `active-set`; Read Recent/Meta show the `active` line and the sidebar shows the same green in-progress style as calls. Verify: the compact sidebar badge shows the count only when present (the label is in the title), after `ttl` seconds the read shows `active:null` (expiry filter), Clear Active → `active-cleared`. A `set-note-active` without `app` returns `missing-app` (the harness always sends `APP`, so test that path via the debug console/docs); a non-creator returns `rejected`.
+- **App Notifications** — *App Notifications* card: Set App Notification (id/title/body/level/ttl; sends top-level `app:APP`) → `app-notification-set`; Read App Notifications shows the row from `/api/app-notifications`, and the main Noltbook Grimoire/Inbox shows an APP row with OPEN/CLEAR where applicable. Clear App Notification → `app-notification-cleared`; setting the same id updates the row; short `ttl` values expire from reads/snapshots.
 - **Profile / Contacts / Pals** — Read Profile / Contacts / Members; Update Profile (null checkbox per field); Add/Remove Contact; Add/Remove/Block/Unblock Pal.
 - **Membership / Admin** — request join, add/remove member, approve/deny/deny+block, mute/unmute, make/remove admin.
 - **Note Config** — name / visibility / writable / headline → Set Selected Note Config.
